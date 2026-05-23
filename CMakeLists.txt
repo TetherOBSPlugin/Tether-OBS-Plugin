@@ -38,6 +38,11 @@ endif()
 #   1. System install (find_package) — devs with libdatachannel-devel.
 #   2. Vendored submodule under deps/libdatachannel — pinned local copy.
 #   3. FetchContent from upstream — CI runners without a system package.
+#
+# libdatachannel and its vendored deps (usrsctp, libsrtp, libjuice, ...) were
+# not written under the OBS template's -Wunused-parameter -Werror umbrella, so
+# we drop warnings-as-errors just for that subtree. Our own target was already
+# created above with the strict default, so this only affects the deps.
 set(_TETHER_LDC_TAG "v0.23.1")
 find_package(LibDataChannel CONFIG QUIET)
 if(NOT LibDataChannel_FOUND)
@@ -47,6 +52,8 @@ if(NOT LibDataChannel_FOUND)
   set(USE_GNUTLS OFF CACHE BOOL "" FORCE)
   set(NO_WEBSOCKET OFF CACHE BOOL "" FORCE)
   set(NO_MEDIA OFF CACHE BOOL "" FORCE)
+  set(_tether_saved_werror ${CMAKE_COMPILE_WARNING_AS_ERROR})
+  set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/deps/libdatachannel/CMakeLists.txt")
     add_subdirectory(deps/libdatachannel EXCLUDE_FROM_ALL)
   else()
@@ -60,6 +67,7 @@ if(NOT LibDataChannel_FOUND)
     )
     FetchContent_MakeAvailable(libdatachannel)
   endif()
+  set(CMAKE_COMPILE_WARNING_AS_ERROR ${_tether_saved_werror})
 endif()
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE LibDataChannel::LibDataChannel)
 
