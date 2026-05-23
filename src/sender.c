@@ -42,15 +42,12 @@ struct session_ctx {
 	char peer_id[TETHER_PEER_ID_MAX];
 };
 
-struct receiver_session {
-	char peer_id[TETHER_PEER_ID_MAX];
-	tether_webrtc_t *wrtc;
-	tether_audio_sender_t *audio;
-	struct session_ctx *ctx;
+// Per-source encoder state inside a receiver session. With multi-source
+// senders, each session holds N of these — one per captured video source —
+// pushing into N separate WebRTC video tracks under unique mids.
+struct source_encoder {
 	int video_track_id;
-
-	// Per-session H.264 encoder (each peer can have its own bitrate /
-	// codec config so we don't share one encoder across receivers).
+	char mid[64];
 	AVCodecContext *enc;
 	AVFrame *enc_in;
 	AVPacket *enc_pkt;
@@ -60,9 +57,41 @@ struct receiver_session {
 	int64_t frame_pts;
 };
 
+struct receiver_session {
+	char peer_id[TETHER_PEER_ID_MAX];
+	tether_webrtc_t *wrtc;
+	tether_audio_sender_t *audio;
+	struct session_ctx *ctx;
+
+	// One entry per captured video source, same order as sender->captures.
+	DARRAY(struct source_encoder *) src_encoders;
+};
+
+// One capture pipeline per video source the sender is sharing. Lives only on
+// the graphics thread (texrender/stagesurf) but exposes its latest captured
+// frame to the encoder worker under sender->frame_lock.
+struct video_capture {
+	char source_name[256];
+	char mid[64];
+	gs_texrender_t *texrender;
+	gs_stagesurf_t *stagesurf;
+	uint32_t stage_w;
+	uint32_t stage_h;
+
+	// Producer/consumer buffer — graphics thread fills, worker thread
+	// consumes. No queue: only the latest frame matters.
+	uint8_t *latest_frame;
+	size_t latest_frame_size;
+	uint32_t latest_frame_w;
+	uint32_t latest_frame_h;
+	uint32_t latest_frame_linesize;
+	bool frame_ready;
+};
+
 struct tether_sender {
 	tether_sender_config_t cfg_owned;
 	DARRAY(char *) audio_source_names;
+	DARRAY(struct video_capture *) captures;
 
 	tether_sender_callbacks_t cbs;
 
@@ -74,26 +103,11 @@ struct tether_sender {
 
 	char current_token[TETHER_TOKEN_BUF];
 
-	// Capture pipeline state — all graphics-thread state lives here.
-	char source_name[256];
-	gs_texrender_t *texrender;
-	gs_stagesurf_t *stagesurf;
-	uint32_t stage_w;
-	uint32_t stage_h;
-
-	// Producer/consumer frame buffer between graphics thread and encoder
-	// worker thread. The graphics thread fills latest_frame and sets
-	// frame_ready; the worker thread consumes (and clears) it. We do not
-	// queue — only the most recent frame matters and dropping older ones
-	// is the right behaviour for low-latency live streaming.
+	// Single frame_lock guards the per-capture latest_frame buffers and
+	// frame_ready flags. The worker wakes whenever ANY capture flips
+	// frame_ready true; it then encodes every ready capture.
 	pthread_mutex_t frame_lock;
 	pthread_cond_t frame_cond;
-	uint8_t *latest_frame;
-	size_t latest_frame_size;
-	uint32_t latest_frame_w;
-	uint32_t latest_frame_h;
-	uint32_t latest_frame_linesize;
-	bool frame_ready;
 	bool worker_running;
 	pthread_t worker;
 };
@@ -120,7 +134,7 @@ static struct receiver_session *find_session_locked(struct tether_sender *s, con
 	return NULL;
 }
 
-static bool ensure_encoder(struct receiver_session *r, int w, int h, int bitrate_kbps)
+static bool ensure_source_encoder(struct source_encoder *r, int w, int h, int bitrate_kbps)
 {
 	if (r->enc && r->enc_width == w && r->enc_height == h) {
 		return true;
@@ -180,23 +194,35 @@ static bool ensure_encoder(struct receiver_session *r, int w, int h, int bitrate
 	return r->sws != NULL;
 }
 
+static void release_source_encoder(struct source_encoder *e)
+{
+	if (!e) {
+		return;
+	}
+	if (e->sws) {
+		sws_freeContext(e->sws);
+	}
+	if (e->enc_pkt) {
+		av_packet_free(&e->enc_pkt);
+	}
+	if (e->enc_in) {
+		av_frame_free(&e->enc_in);
+	}
+	if (e->enc) {
+		avcodec_free_context(&e->enc);
+	}
+	bfree(e);
+}
+
 static void release_session(struct receiver_session *r)
 {
 	if (!r) {
 		return;
 	}
-	if (r->sws) {
-		sws_freeContext(r->sws);
+	for (size_t i = 0; i < r->src_encoders.num; ++i) {
+		release_source_encoder(r->src_encoders.array[i]);
 	}
-	if (r->enc_pkt) {
-		av_packet_free(&r->enc_pkt);
-	}
-	if (r->enc_in) {
-		av_frame_free(&r->enc_in);
-	}
-	if (r->enc) {
-		avcodec_free_context(&r->enc);
-	}
+	da_free(r->src_encoders);
 	if (r->audio) {
 		tether_audio_sender_release(r->audio);
 	}
@@ -241,7 +267,17 @@ static void create_session(struct tether_sender *s, const tether_peer_t *peer)
 	strncpy(r->peer_id, peer->peer_id, sizeof(r->peer_id) - 1);
 	r->ctx = ctx;
 	r->wrtc = w;
-	r->video_track_id = tether_webrtc_add_video_track(w);
+	da_init(r->src_encoders);
+
+	// Add one WebRTC video track per captured source. Each gets a unique
+	// mid (videoN) so the receiver can address them individually.
+	for (size_t i = 0; i < s->captures.num; ++i) {
+		struct video_capture *cap = s->captures.array[i];
+		struct source_encoder *se = bzalloc(sizeof(*se));
+		strncpy(se->mid, cap->mid, sizeof(se->mid) - 1);
+		se->video_track_id = tether_webrtc_add_video_track_ex(w, cap->mid, cap->source_name);
+		da_push_back(r->src_encoders, &se);
+	}
 
 	tether_audio_sender_config_t arcfg = {
 		.webrtc = w,
@@ -436,13 +472,9 @@ static void on_signaling_event(void *user, tether_signaling_event_t evt, const t
 
 // ---- capture pipeline --------------------------------------------------
 
-static void graphics_render_cb(void *param, uint32_t cx, uint32_t cy)
+static void capture_one(struct tether_sender *s, struct video_capture *cap)
 {
-	UNUSED_PARAMETER(cx);
-	UNUSED_PARAMETER(cy);
-	struct tether_sender *s = param;
-
-	obs_source_t *src = obs_get_source_by_name(s->source_name);
+	obs_source_t *src = obs_get_source_by_name(cap->source_name);
 	if (!src) {
 		return;
 	}
@@ -453,71 +485,85 @@ static void graphics_render_cb(void *param, uint32_t cx, uint32_t cy)
 		return;
 	}
 
-	if (!s->texrender) {
-		s->texrender = gs_texrender_create(GS_BGRA, GS_ZS_NONE);
+	if (!cap->texrender) {
+		cap->texrender = gs_texrender_create(GS_BGRA, GS_ZS_NONE);
 	}
-	if (s->stage_w != w || s->stage_h != h) {
-		if (s->stagesurf) {
-			gs_stagesurface_destroy(s->stagesurf);
+	if (cap->stage_w != w || cap->stage_h != h) {
+		if (cap->stagesurf) {
+			gs_stagesurface_destroy(cap->stagesurf);
 		}
-		s->stagesurf = gs_stagesurface_create(w, h, GS_BGRA);
-		s->stage_w = w;
-		s->stage_h = h;
+		cap->stagesurf = gs_stagesurface_create(w, h, GS_BGRA);
+		cap->stage_w = w;
+		cap->stage_h = h;
 	}
 
-	gs_texrender_reset(s->texrender);
-	if (!gs_texrender_begin(s->texrender, w, h)) {
+	gs_texrender_reset(cap->texrender);
+	if (!gs_texrender_begin(cap->texrender, w, h)) {
 		obs_source_release(src);
 		return;
 	}
 	gs_ortho(0.0f, (float)w, 0.0f, (float)h, -100.0f, 100.0f);
 	obs_source_video_render(src);
-	gs_texrender_end(s->texrender);
+	gs_texrender_end(cap->texrender);
 
-	gs_stage_texture(s->stagesurf, gs_texrender_get_texture(s->texrender));
+	gs_stage_texture(cap->stagesurf, gs_texrender_get_texture(cap->texrender));
 	uint8_t *data = NULL;
 	uint32_t linesize = 0;
-	if (gs_stagesurface_map(s->stagesurf, &data, &linesize)) {
+	if (gs_stagesurface_map(cap->stagesurf, &data, &linesize)) {
 		size_t need = (size_t)linesize * h;
 		pthread_mutex_lock(&s->frame_lock);
-		if (s->latest_frame_size < need) {
-			bfree(s->latest_frame);
-			s->latest_frame = bmalloc(need);
-			s->latest_frame_size = need;
+		if (cap->latest_frame_size < need) {
+			bfree(cap->latest_frame);
+			cap->latest_frame = bmalloc(need);
+			cap->latest_frame_size = need;
 		}
-		memcpy(s->latest_frame, data, need);
-		s->latest_frame_w = w;
-		s->latest_frame_h = h;
-		s->latest_frame_linesize = linesize;
-		s->frame_ready = true;
+		memcpy(cap->latest_frame, data, need);
+		cap->latest_frame_w = w;
+		cap->latest_frame_h = h;
+		cap->latest_frame_linesize = linesize;
+		cap->frame_ready = true;
 		pthread_cond_signal(&s->frame_cond);
 		pthread_mutex_unlock(&s->frame_lock);
-		gs_stagesurface_unmap(s->stagesurf);
+		gs_stagesurface_unmap(cap->stagesurf);
 	}
 	obs_source_release(src);
 }
 
-static void encode_frame_to_sessions(struct tether_sender *s, const uint8_t *bgra, uint32_t w, uint32_t h,
-				     uint32_t linesize)
+static void graphics_render_cb(void *param, uint32_t cx, uint32_t cy)
+{
+	UNUSED_PARAMETER(cx);
+	UNUSED_PARAMETER(cy);
+	struct tether_sender *s = param;
+	for (size_t i = 0; i < s->captures.num; ++i) {
+		capture_one(s, s->captures.array[i]);
+	}
+}
+
+static void encode_capture_to_sessions(struct tether_sender *s, size_t cap_idx, const uint8_t *bgra, uint32_t w,
+				       uint32_t h, uint32_t linesize)
 {
 	pthread_mutex_lock(&s->lock);
 	for (size_t i = 0; i < s->sessions.num; ++i) {
 		struct receiver_session *r = s->sessions.array[i];
+		if (cap_idx >= r->src_encoders.num) {
+			continue;
+		}
+		struct source_encoder *se = r->src_encoders.array[cap_idx];
 		int br = s->cfg_owned.video_bitrate_kbps > 0 ? s->cfg_owned.video_bitrate_kbps : 6000;
-		if (!ensure_encoder(r, (int)w, (int)h, br)) {
+		if (!ensure_source_encoder(se, (int)w, (int)h, br)) {
 			continue;
 		}
 		const uint8_t *src_planes[4] = {bgra, NULL, NULL, NULL};
 		int src_strides[4] = {(int)linesize, 0, 0, 0};
-		sws_scale(r->sws, src_planes, src_strides, 0, (int)h, r->enc_in->data, r->enc_in->linesize);
-		r->enc_in->pts = r->frame_pts++;
-		if (avcodec_send_frame(r->enc, r->enc_in) < 0) {
+		sws_scale(se->sws, src_planes, src_strides, 0, (int)h, se->enc_in->data, se->enc_in->linesize);
+		se->enc_in->pts = se->frame_pts++;
+		if (avcodec_send_frame(se->enc, se->enc_in) < 0) {
 			continue;
 		}
-		while (avcodec_receive_packet(r->enc, r->enc_pkt) == 0) {
-			tether_webrtc_push_video(r->wrtc, r->video_track_id, r->enc_pkt->data, (size_t)r->enc_pkt->size,
-						 r->enc_pkt->pts);
-			av_packet_unref(r->enc_pkt);
+		while (avcodec_receive_packet(se->enc, se->enc_pkt) == 0) {
+			tether_webrtc_push_video(r->wrtc, se->video_track_id, se->enc_pkt->data,
+						 (size_t)se->enc_pkt->size, se->enc_pkt->pts);
+			av_packet_unref(se->enc_pkt);
 		}
 	}
 	pthread_mutex_unlock(&s->lock);
@@ -530,27 +576,50 @@ static void *encoder_worker_main(void *param)
 	size_t local_cap = 0;
 	while (true) {
 		pthread_mutex_lock(&s->frame_lock);
-		while (s->worker_running && !s->frame_ready) {
+		// Wait until at least one capture has a ready frame or we shut down.
+		bool any_ready = false;
+		do {
+			any_ready = false;
+			for (size_t i = 0; i < s->captures.num; ++i) {
+				if (s->captures.array[i]->frame_ready) {
+					any_ready = true;
+					break;
+				}
+			}
+			if (!s->worker_running || any_ready) {
+				break;
+			}
 			pthread_cond_wait(&s->frame_cond, &s->frame_lock);
-		}
+		} while (true);
 		if (!s->worker_running) {
 			pthread_mutex_unlock(&s->frame_lock);
 			break;
 		}
-		uint32_t w = s->latest_frame_w;
-		uint32_t h = s->latest_frame_h;
-		uint32_t ls = s->latest_frame_linesize;
-		size_t need = (size_t)ls * h;
-		if (local_cap < need) {
-			bfree(local);
-			local = bmalloc(need);
-			local_cap = need;
-		}
-		memcpy(local, s->latest_frame, need);
-		s->frame_ready = false;
-		pthread_mutex_unlock(&s->frame_lock);
 
-		encode_frame_to_sessions(s, local, w, h, ls);
+		// Take a snapshot of all currently-ready captures, clear their
+		// flags, and release the frame_lock before kicking off encodes.
+		size_t ncap = s->captures.num;
+		for (size_t i = 0; i < ncap; ++i) {
+			struct video_capture *cap = s->captures.array[i];
+			if (!cap->frame_ready) {
+				continue;
+			}
+			uint32_t w = cap->latest_frame_w;
+			uint32_t h = cap->latest_frame_h;
+			uint32_t ls = cap->latest_frame_linesize;
+			size_t need = (size_t)ls * h;
+			if (local_cap < need) {
+				bfree(local);
+				local = bmalloc(need);
+				local_cap = need;
+			}
+			memcpy(local, cap->latest_frame, need);
+			cap->frame_ready = false;
+			pthread_mutex_unlock(&s->frame_lock);
+			encode_capture_to_sessions(s, i, local, w, h, ls);
+			pthread_mutex_lock(&s->frame_lock);
+		}
+		pthread_mutex_unlock(&s->frame_lock);
 	}
 	bfree(local);
 	return NULL;
@@ -570,9 +639,27 @@ void tether_sender_shutdown(void)
 
 tether_sender_t *tether_sender_create(const tether_sender_config_t *cfg, const tether_sender_callbacks_t *cbs)
 {
-	if (!cfg || !cfg->source_name || !*cfg->source_name) {
+	if (!cfg) {
 		return NULL;
 	}
+	// Resolve the video sources: the explicit array beats the legacy single
+	// source_name. Need at least one valid entry.
+	const char *first = NULL;
+	if (cfg->video_source_names) {
+		for (const char *const *p = cfg->video_source_names; *p; ++p) {
+			if (*p && **p) {
+				first = *p;
+				break;
+			}
+		}
+	}
+	if (!first) {
+		first = (cfg->source_name && *cfg->source_name) ? cfg->source_name : NULL;
+	}
+	if (!first) {
+		return NULL;
+	}
+
 	struct tether_sender *s = bzalloc(sizeof(*s));
 	s->cfg_owned = *cfg;
 	if (cfg->video_bitrate_kbps <= 0) {
@@ -584,7 +671,6 @@ tether_sender_t *tether_sender_create(const tether_sender_config_t *cfg, const t
 	if (cfg->token_ttl_minutes <= 0) {
 		s->cfg_owned.token_ttl_minutes = 30;
 	}
-	strncpy(s->source_name, cfg->source_name, sizeof(s->source_name) - 1);
 	if (cbs) {
 		s->cbs = *cbs;
 	}
@@ -592,6 +678,29 @@ tether_sender_t *tether_sender_create(const tether_sender_config_t *cfg, const t
 	pthread_mutex_init(&s->lock, NULL);
 	pthread_mutex_init(&s->frame_lock, NULL);
 	pthread_cond_init(&s->frame_cond, NULL);
+	da_init(s->captures);
+
+	// Build the capture list. Each capture gets mid "video0", "video1", …
+	// so receivers can route per-source. We populate from the array if
+	// present, otherwise fall back to the single source_name.
+	int idx = 0;
+	if (cfg->video_source_names) {
+		for (const char *const *p = cfg->video_source_names; *p; ++p) {
+			if (!*p || !**p) {
+				continue;
+			}
+			struct video_capture *cap = bzalloc(sizeof(*cap));
+			strncpy(cap->source_name, *p, sizeof(cap->source_name) - 1);
+			snprintf(cap->mid, sizeof(cap->mid), "video%d", idx++);
+			da_push_back(s->captures, &cap);
+		}
+	}
+	if (s->captures.num == 0) {
+		struct video_capture *cap = bzalloc(sizeof(*cap));
+		strncpy(cap->source_name, first, sizeof(cap->source_name) - 1);
+		snprintf(cap->mid, sizeof(cap->mid), "video0");
+		da_push_back(s->captures, &cap);
+	}
 
 	if (cfg->audio_source_names) {
 		for (const char *const *p = cfg->audio_source_names; *p; ++p) {
@@ -614,7 +723,7 @@ tether_sender_t *tether_sender_create(const tether_sender_config_t *cfg, const t
 	tether_signaling_config_t scfg = {
 		.server_url = fallback_or(s->cfg_owned.server_url, tether_default_server_url()),
 		.role = TETHER_ROLE_SENDER,
-		.display_name = s->source_name,
+		.display_name = s->captures.num > 0 ? s->captures.array[0]->source_name : "tether",
 		.token_ttl_minutes = s->cfg_owned.token_ttl_minutes,
 		.reusable_token = s->cfg_owned.reusable_token,
 		.cb = on_signaling_event,
@@ -661,20 +770,25 @@ void tether_sender_release(tether_sender_t *s)
 	}
 
 	obs_enter_graphics();
-	if (s->stagesurf) {
-		gs_stagesurface_destroy(s->stagesurf);
-	}
-	if (s->texrender) {
-		gs_texrender_destroy(s->texrender);
+	for (size_t i = 0; i < s->captures.num; ++i) {
+		struct video_capture *cap = s->captures.array[i];
+		if (cap->stagesurf) {
+			gs_stagesurface_destroy(cap->stagesurf);
+		}
+		if (cap->texrender) {
+			gs_texrender_destroy(cap->texrender);
+		}
+		bfree(cap->latest_frame);
+		bfree(cap);
 	}
 	obs_leave_graphics();
+	da_free(s->captures);
 
 	for (size_t i = 0; i < s->audio_source_names.num; ++i) {
 		bfree(s->audio_source_names.array[i]);
 	}
 	da_free(s->audio_source_names);
 	da_free(s->sessions);
-	bfree(s->latest_frame);
 	pthread_cond_destroy(&s->frame_cond);
 	pthread_mutex_destroy(&s->frame_lock);
 	pthread_mutex_destroy(&s->lock);

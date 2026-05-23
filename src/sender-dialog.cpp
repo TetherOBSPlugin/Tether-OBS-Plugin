@@ -65,7 +65,7 @@ private:
 	void postPeerState(const QString &peer_id, tether_sender_state_t state);
 	void postPeerGone(const QString &peer_id);
 
-	QComboBox *sourceCombo_ = nullptr;
+	QListWidget *sourceList_ = nullptr;
 	QListWidget *audioList_ = nullptr;
 	QComboBox *modeCombo_ = nullptr;
 	QLineEdit *serverField_ = nullptr;
@@ -130,8 +130,10 @@ SenderDialog::SenderDialog() : QDialog(nullptr)
 	auto *settingsHeader = new QLabel(fromTr("Settings.VideoSource"), this);
 	root->addSpacing(8);
 	root->addWidget(settingsHeader);
-	sourceCombo_ = new QComboBox(this);
-	root->addWidget(sourceCombo_);
+	sourceList_ = new QListWidget(this);
+	sourceList_->setSelectionMode(QAbstractItemView::NoSelection);
+	sourceList_->setMaximumHeight(140);
+	root->addWidget(sourceList_);
 
 	auto *audioLabel = new QLabel(fromTr("Settings.AudioTracks"), this);
 	root->addWidget(audioLabel);
@@ -214,9 +216,14 @@ void SenderDialog::populateSourceList()
 		}
 		if (is_video) {
 			const QString qname = QString::fromUtf8(name);
-			if (sourceCombo_->findText(qname) < 0) {
-				sourceCombo_->addItem(qname);
+			for (int i = 0; i < sourceList_->count(); ++i) {
+				if (sourceList_->item(i)->text() == qname) {
+					return;
+				}
 			}
+			auto *item = new QListWidgetItem(qname, sourceList_);
+			item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+			item->setCheckState(Qt::Unchecked);
 		}
 		if (is_audio) {
 			const QString qname = QString::fromUtf8(name);
@@ -256,11 +263,23 @@ void SenderDialog::onGenerateToken()
 		tether_sender_release(sender_);
 		sender_ = nullptr;
 	}
-	const QString sourceName = sourceCombo_->currentText();
-	if (sourceName.isEmpty()) {
+	std::vector<QByteArray> sourceBytes;
+	for (int i = 0; i < sourceList_->count(); ++i) {
+		QListWidgetItem *it = sourceList_->item(i);
+		if (it->checkState() == Qt::Checked) {
+			sourceBytes.push_back(it->text().toUtf8());
+		}
+	}
+	if (sourceBytes.empty()) {
 		statusLabel_->setText(fromTr("Settings.VideoSource.Description"));
 		return;
 	}
+	std::vector<const char *> sourcePtrs;
+	for (const auto &ba : sourceBytes) {
+		sourcePtrs.push_back(ba.constData());
+	}
+	sourcePtrs.push_back(nullptr);
+
 	std::vector<QByteArray> audioBytes;
 	for (int i = 0; i < audioList_->count(); ++i) {
 		QListWidgetItem *it = audioList_->item(i);
@@ -274,12 +293,11 @@ void SenderDialog::onGenerateToken()
 	}
 	audioPtrs.push_back(nullptr);
 
-	const QByteArray sourceBytes = sourceName.toUtf8();
 	const QByteArray serverBytes = serverField_->text().toUtf8();
 
 	tether_sender_config_t cfg{};
 	cfg.server_url = serverBytes.isEmpty() ? nullptr : serverBytes.constData();
-	cfg.source_name = sourceBytes.constData();
+	cfg.video_source_names = sourcePtrs.data();
 	cfg.audio_source_names = audioPtrs.empty() ? nullptr : audioPtrs.data();
 	cfg.video_bitrate_kbps = 6000;
 	cfg.max_receivers = 4;

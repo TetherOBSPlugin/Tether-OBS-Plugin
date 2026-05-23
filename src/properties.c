@@ -10,6 +10,9 @@
 
 #include "known-tokens.h"
 #include "log.h"
+#include "receive-session.h"
+
+#include <string.h>
 
 // Compile-time managed default. Replace the subdomain with the one your
 // deployed Worker script registers under (configurable in CI).
@@ -80,6 +83,39 @@ obs_properties_t *tether_properties_for_receiver(obs_source_t *src)
 		obs_property_list_add_string(t, known[i], known[i]);
 	}
 	tether_known_tokens_free_snapshot(known, n);
+
+	// Stream pickers: editable combo per A/V. Empty = consume any. When a
+	// session carries multiple m=video / m=audio lines (multi-source
+	// sender), the live mids show up as dropdown options here.
+	obs_property_t *vmid = obs_properties_add_list(g, "video_mid", obs_module_text("Settings.Stream.Video"),
+						       OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
+	obs_property_t *amid = obs_properties_add_list(g, "audio_mid", obs_module_text("Settings.Stream.Audio"),
+						       OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
+	obs_property_list_add_string(vmid, obs_module_text("Settings.Stream.Any"), "");
+	obs_property_list_add_string(amid, obs_module_text("Settings.Stream.Any"), "");
+	if (src) {
+		obs_data_t *settings = obs_source_get_settings(src);
+		const char *tok = obs_data_get_string(settings, "token");
+		obs_data_release(settings);
+		if (tok && *tok) {
+			tether_receive_session_t *sess = tether_receive_session_get(tok);
+			if (sess) {
+				size_t vn = 0, an = 0;
+				char **vmids = tether_receive_session_video_mids(sess, &vn);
+				char **amids = tether_receive_session_audio_mids(sess, &an);
+				for (size_t i = 0; i < vn; ++i) {
+					obs_property_list_add_string(vmid, vmids[i], vmids[i]);
+				}
+				for (size_t i = 0; i < an; ++i) {
+					obs_property_list_add_string(amid, amids[i], amids[i]);
+				}
+				tether_receive_session_free_mids(vmids, vn);
+				tether_receive_session_free_mids(amids, an);
+				tether_receive_session_release(sess);
+			}
+		}
+	}
+
 	obs_properties_add_group(p, "token_group", obs_module_text("Settings.Group.Source"), OBS_GROUP_NORMAL, g);
 
 	add_advanced(p);

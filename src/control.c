@@ -165,24 +165,51 @@ static void cmd_sender_create(struct tether_control *c, int fd, char *args)
 		reply(fd, "ERR missing source name");
 		return;
 	}
-	// Split args on commas: first = video source, rest = audio sources
-	char *saveptr = NULL;
-	char *src = strtok_r(args, ",", &saveptr);
-	if (!src) {
-		reply(fd, "ERR missing source name");
-		return;
+	// Format: <video1,video2,...>|<audio1,audio2,...>
+	// The pipe separates the video list from the audio list. If no pipe is
+	// present, fall back to legacy form (first = video, rest = audio).
+	char *video_section = args;
+	char *audio_section = strchr(args, '|');
+	if (audio_section) {
+		*audio_section++ = '\0';
 	}
+	DARRAY(char *) video_ptrs;
 	DARRAY(char *) audio_ptrs;
+	da_init(video_ptrs);
 	da_init(audio_ptrs);
-	char *tok;
-	while ((tok = strtok_r(NULL, ",", &saveptr)) != NULL) {
-		da_push_back(audio_ptrs, &tok);
+
+	char *saveptr = NULL;
+	for (char *tok = strtok_r(video_section, ",", &saveptr); tok; tok = strtok_r(NULL, ",", &saveptr)) {
+		if (*tok) {
+			da_push_back(video_ptrs, &tok);
+		}
+	}
+	if (audio_section) {
+		for (char *tok = strtok_r(audio_section, ",", &saveptr); tok; tok = strtok_r(NULL, ",", &saveptr)) {
+			if (*tok) {
+				da_push_back(audio_ptrs, &tok);
+			}
+		}
+	} else if (video_ptrs.num > 1) {
+		// Legacy: only one video, the rest are audio.
+		for (size_t i = 1; i < video_ptrs.num; ++i) {
+			da_push_back(audio_ptrs, &video_ptrs.array[i]);
+		}
+		video_ptrs.num = 1;
 	}
 	char *sentinel = NULL;
+	da_push_back(video_ptrs, &sentinel);
 	da_push_back(audio_ptrs, &sentinel);
 
+	if (video_ptrs.num <= 1) {
+		reply(fd, "ERR missing video source");
+		da_free(video_ptrs);
+		da_free(audio_ptrs);
+		return;
+	}
+
 	tether_sender_config_t cfg = {0};
-	cfg.source_name = src;
+	cfg.video_source_names = (const char *const *)video_ptrs.array;
 	cfg.audio_source_names = (const char *const *)audio_ptrs.array;
 	cfg.video_bitrate_kbps = 6000;
 	cfg.max_receivers = 4;
@@ -197,6 +224,7 @@ static void cmd_sender_create(struct tether_control *c, int fd, char *args)
 	cbs.on_peer_gone = on_sender_peer_gone;
 
 	c->sender = tether_sender_create(&cfg, &cbs);
+	da_free(video_ptrs);
 	da_free(audio_ptrs);
 	if (!c->sender) {
 		reply(fd, "ERR sender create failed");

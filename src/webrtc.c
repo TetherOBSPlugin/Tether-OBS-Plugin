@@ -21,6 +21,7 @@ struct track_entry {
 	int handle;
 	int track_id;
 	bool is_video;
+	char mid[64];
 };
 
 struct tether_webrtc {
@@ -123,32 +124,75 @@ static void RTC_API on_local_candidate(int pc, const char *candidate, const char
 	}
 }
 
+static void parse_mid_from_desc(const char *desc, char *out, size_t out_size)
+{
+	out[0] = '\0';
+	const char *p = desc ? strstr(desc, "a=mid:") : NULL;
+	if (!p) {
+		return;
+	}
+	p += 6;
+	size_t i = 0;
+	while (*p && *p != '\r' && *p != '\n' && i < out_size - 1) {
+		out[i++] = *p++;
+	}
+	out[i] = '\0';
+}
+
+static void RTC_API on_track_message(int tr, const char *msg, int size, void *user)
+{
+	tether_webrtc_t *w = user;
+	if (!msg || size == 0) {
+		return;
+	}
+	// Negative size = text frame; media is always binary.
+	if (size < 0) {
+		return;
+	}
+	bool is_video = false;
+	const char *mid = NULL;
+	pthread_mutex_lock(&w->lock);
+	for (size_t i = 0; i < w->tracks.num; ++i) {
+		if (w->tracks.array[i].handle == tr) {
+			is_video = w->tracks.array[i].is_video;
+			mid = w->tracks.array[i].mid;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&w->lock);
+	if (is_video) {
+		if (w->cfg.on_video) {
+			w->cfg.on_video(w->cfg.user, (const uint8_t *)msg, (size_t)size, 0, tr, mid);
+		}
+	} else {
+		if (w->cfg.on_audio) {
+			w->cfg.on_audio(w->cfg.user, (const uint8_t *)msg, (size_t)size, 0, tr, mid);
+		}
+	}
+}
+
 static void RTC_API on_track(int pc, int tr, void *user)
 {
 	(void)pc;
 	tether_webrtc_t *w = user;
-	// Incoming remote track on the receiver side. Hook a message callback.
-	// libdatachannel >= 0.20 delivers depayloaded media frames via
-	// rtcSetMessageCallback when a media handler is attached. We rely on
-	// the caller having set the codec mid the offer/answer cycle, so we
-	// just route through the user-provided audio/video callbacks based on
-	// track type, which we infer from the track description.
+	// Incoming remote track on the receiver side. Capture its m-line so we
+	// can address it by mid and hook the message callback so depacketised
+	// payloads land in the configured on_video / on_audio.
 	char desc[1024];
 	int n = rtcGetTrackDescription(tr, desc, sizeof(desc));
 	bool is_video = false;
+	struct track_entry e = {.handle = tr, .track_id = w->next_track_id++};
 	if (n > 0) {
 		is_video = strstr(desc, "m=video") != NULL;
+		parse_mid_from_desc(desc, e.mid, sizeof(e.mid));
 	}
-
-	struct track_entry e = {.handle = tr, .track_id = w->next_track_id++, .is_video = is_video};
+	e.is_video = is_video;
 	pthread_mutex_lock(&w->lock);
 	da_push_back(w->tracks, &e);
 	pthread_mutex_unlock(&w->lock);
 
 	rtcSetUserPointer(tr, w);
-	rtcSetMessageCallback(tr, (void (*)(int, const char *, int, void *))NULL);
-	// The message-callback prototype for media is the same shape we use in
-	// signaling.c (id, msg, size, user). We dispatch based on track type.
+	rtcSetMessageCallback(tr, on_track_message);
 }
 
 tether_webrtc_t *tether_webrtc_create(const tether_webrtc_config_t *cfg)
@@ -306,11 +350,17 @@ static const char *codec_name(tether_video_codec_t c)
 	return "h264";
 }
 
-int tether_webrtc_add_video_track(tether_webrtc_t *w)
+int tether_webrtc_add_video_track_ex(tether_webrtc_t *w, const char *mid, const char *label)
 {
 	if (!w) {
 		return -1;
 	}
+	char mid_buf[64];
+	if (!mid || !*mid) {
+		snprintf(mid_buf, sizeof(mid_buf), "video%d", (int)w->tracks.num);
+		mid = mid_buf;
+	}
+	const char *track_label = (label && *label) ? label : "tether-video";
 	rtcTrackInit init = {
 		.direction = RTC_DIRECTION_SENDONLY,
 		.codec = w->cfg.video_codec == TETHER_CODEC_H264  ? RTC_CODEC_H264
@@ -318,10 +368,10 @@ int tether_webrtc_add_video_track(tether_webrtc_t *w)
 								  : RTC_CODEC_AV1,
 		.payloadType = payload_type_for(w->cfg.video_codec),
 		.ssrc = (uint32_t)(rand() & 0x7fffffff),
-		.mid = "video",
-		.name = "tether-video",
+		.mid = (char *)mid,
+		.name = (char *)track_label,
 		.msid = "tether",
-		.trackId = "tether-video",
+		.trackId = (char *)track_label,
 	};
 	int tr = rtcAddTrackEx(w->pc, &init);
 	if (tr <= 0) {
@@ -329,11 +379,18 @@ int tether_webrtc_add_video_track(tether_webrtc_t *w)
 		return -1;
 	}
 	struct track_entry e = {.handle = tr, .track_id = w->next_track_id++, .is_video = true};
+	strncpy(e.mid, mid, sizeof(e.mid) - 1);
 	pthread_mutex_lock(&w->lock);
 	da_push_back(w->tracks, &e);
 	pthread_mutex_unlock(&w->lock);
-	tether_log_debug("webrtc: added video track id=%d codec=%s", e.track_id, codec_name(w->cfg.video_codec));
+	tether_log_debug("webrtc: added video track id=%d mid=%s codec=%s", e.track_id, e.mid,
+			 codec_name(w->cfg.video_codec));
 	return e.track_id;
+}
+
+int tether_webrtc_add_video_track(tether_webrtc_t *w)
+{
+	return tether_webrtc_add_video_track_ex(w, "video", "tether-video");
 }
 
 int tether_webrtc_add_audio_track(tether_webrtc_t *w, const char *label)
@@ -359,6 +416,7 @@ int tether_webrtc_add_audio_track(tether_webrtc_t *w, const char *label)
 		return -1;
 	}
 	struct track_entry e = {.handle = tr, .track_id = w->next_track_id++, .is_video = false};
+	strncpy(e.mid, mid, sizeof(e.mid) - 1);
 	pthread_mutex_lock(&w->lock);
 	da_push_back(w->tracks, &e);
 	pthread_mutex_unlock(&w->lock);

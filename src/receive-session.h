@@ -44,12 +44,21 @@ typedef enum {
 const char *tether_receive_state_name(tether_receive_state_t s);
 
 // Frame callbacks. width/height are valid for video; sample_rate/channels for
-// audio. data is owned by the session for the duration of the call.
+// audio. `mid` identifies which SDP track the payload came in on; subscribers
+// that only want one stream (e.g. one Tether-Quelle source picking one of N
+// video tracks) filter on this. data is owned by the session for the
+// duration of the call.
 typedef void (*tether_rx_video_cb_t)(void *user, const uint8_t *data, size_t size, uint32_t width, uint32_t height,
-				     int64_t pts);
+				     int64_t pts, const char *mid);
 typedef void (*tether_rx_audio_cb_t)(void *user, const uint8_t *data, size_t size, uint32_t sample_rate,
-				     uint32_t channels, int64_t pts);
+				     uint32_t channels, int64_t pts, const char *mid);
 typedef void (*tether_rx_state_cb_t)(void *user, tether_receive_state_t state);
+
+// Lists the mids of currently-attached video/audio tracks on the session.
+// out[*count] is a malloc'd array of bstrdup'd strings; pass NULL to free.
+char **tether_receive_session_video_mids(tether_receive_session_t *s, size_t *count);
+char **tether_receive_session_audio_mids(tether_receive_session_t *s, size_t *count);
+void tether_receive_session_free_mids(char **mids, size_t count);
 
 // Registry: get or create a session for a token. Caller gets a ref-bumped
 // pointer; release with tether_receive_session_release.

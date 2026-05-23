@@ -44,8 +44,14 @@ typedef enum {
 typedef void (*tether_wrtc_local_sdp_cb_t)(void *user, const char *sdp_type, const char *sdp);
 typedef void (*tether_wrtc_local_ice_cb_t)(void *user, const char *candidate, const char *mid, int mline_index);
 typedef void (*tether_wrtc_state_cb_t)(void *user, tether_webrtc_state_t state);
-typedef void (*tether_wrtc_video_cb_t)(void *user, const uint8_t *data, size_t size, int64_t pts, int track_id);
-typedef void (*tether_wrtc_audio_cb_t)(void *user, const uint8_t *data, size_t size, int64_t pts, int track_id);
+// `mid` is the SDP m-line identifier the track was negotiated under (set by
+// the offerer in add_video_track / add_audio_track and echoed back in
+// libdatachannel's track description). Receivers use it to route a track to
+// the right consumer when a session carries multiple streams.
+typedef void (*tether_wrtc_video_cb_t)(void *user, const uint8_t *data, size_t size, int64_t pts, int track_id,
+				       const char *mid);
+typedef void (*tether_wrtc_audio_cb_t)(void *user, const uint8_t *data, size_t size, int64_t pts, int track_id,
+				       const char *mid);
 
 typedef struct {
 	const char *stun_url;
@@ -72,7 +78,12 @@ bool tether_webrtc_apply_remote_sdp(tether_webrtc_t *w, const char *sdp_type, co
 bool tether_webrtc_add_remote_ice(tether_webrtc_t *w, const char *candidate, const char *mid);
 
 // Track management. Returns a stable track id, or -1 on failure.
+// `mid` is the SDP m-line identifier (e.g. "video0", "audio0"). Pass NULL
+// to let the implementation pick "video"/"audio<N>". For multi-source
+// senders the caller MUST pass unique mids so receivers can address each
+// stream.
 int tether_webrtc_add_video_track(tether_webrtc_t *w);
+int tether_webrtc_add_video_track_ex(tether_webrtc_t *w, const char *mid, const char *label);
 int tether_webrtc_add_audio_track(tether_webrtc_t *w, const char *label);
 
 // Initiate (or restart) negotiation. For media tracks libdatachannel's auto-

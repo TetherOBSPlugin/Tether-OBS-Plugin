@@ -32,7 +32,9 @@
 struct tether_source {
 	obs_source_t *source;
 
-	char *token; // currently-bound token; NULL means no session
+	char *token;     // currently-bound token; NULL means no session
+	char *video_mid; // empty/NULL = render first / any video stream
+	char *audio_mid; // empty/NULL = consume first / any audio stream
 	tether_receive_session_t *session;
 	tether_rx_subscription_t *sub;
 
@@ -131,12 +133,19 @@ static void deliver_decoded_frame(struct tether_source *s, int64_t pts)
 	obs_source_output_video(s->source, &frame);
 }
 
-static void on_session_video(void *user, const uint8_t *data, size_t size, uint32_t w, uint32_t h, int64_t pts)
+static void on_session_video(void *user, const uint8_t *data, size_t size, uint32_t w, uint32_t h, int64_t pts,
+			     const char *mid)
 {
 	UNUSED_PARAMETER(w);
 	UNUSED_PARAMETER(h);
 	struct tether_source *s = user;
 	if (!data || size == 0) {
+		return;
+	}
+	// Filter: if the user pinned a specific video mid, drop packets from
+	// the other tracks. Empty mid → consume whichever stream lands first
+	// (single-source backwards compat).
+	if (s->video_mid && *s->video_mid && mid && strcmp(s->video_mid, mid) != 0) {
 		return;
 	}
 	pthread_mutex_lock(&s->decoder_lock);
@@ -162,11 +171,14 @@ static void on_session_video(void *user, const uint8_t *data, size_t size, uint3
 }
 
 static void on_session_audio(void *user, const uint8_t *data, size_t size, uint32_t sample_rate, uint32_t channels,
-			     int64_t pts)
+			     int64_t pts, const char *mid)
 {
 	UNUSED_PARAMETER(sample_rate);
 	UNUSED_PARAMETER(channels);
 	struct tether_source *s = user;
+	if (s->audio_mid && *s->audio_mid && mid && strcmp(s->audio_mid, mid) != 0) {
+		return;
+	}
 	// Track id of 0 is fine — audio.c uses it as a hash key, not a routing
 	// label, so a single source attaching a single session collapses to one
 	// Opus stream as intended.
@@ -221,6 +233,10 @@ static void *create(obs_data_t *settings, obs_source_t *source)
 	}
 
 	const char *tok = obs_data_get_string(settings, "token");
+	const char *vmid = obs_data_get_string(settings, "video_mid");
+	const char *amid = obs_data_get_string(settings, "audio_mid");
+	s->video_mid = (vmid && *vmid) ? bstrdup(vmid) : NULL;
+	s->audio_mid = (amid && *amid) ? bstrdup(amid) : NULL;
 	attach_session(s, tok);
 	return s;
 }
@@ -238,6 +254,8 @@ static void destroy(void *data)
 		tether_audio_receiver_release(s->audio);
 	}
 	bfree(s->token);
+	bfree(s->video_mid);
+	bfree(s->audio_mid);
 	pthread_mutex_destroy(&s->decoder_lock);
 	bfree(s);
 }
@@ -246,9 +264,15 @@ static void update(void *data, obs_data_t *settings)
 {
 	struct tether_source *s = data;
 	const char *tok = obs_data_get_string(settings, "token");
+	const char *vmid = obs_data_get_string(settings, "video_mid");
+	const char *amid = obs_data_get_string(settings, "audio_mid");
 	if (!s->token || !tok || strcmp(s->token ? s->token : "", tok) != 0) {
 		attach_session(s, tok);
 	}
+	bfree(s->video_mid);
+	s->video_mid = (vmid && *vmid) ? bstrdup(vmid) : NULL;
+	bfree(s->audio_mid);
+	s->audio_mid = (amid && *amid) ? bstrdup(amid) : NULL;
 }
 
 static void defaults(obs_data_t *settings)

@@ -42,12 +42,16 @@ typedef struct {
 } tether_sender_callbacks_t;
 
 typedef struct {
-	const char *server_url;                // wss://... ; NULL = use compile-time default
-	const char *stun_url;                  // optional
-	const char *turn_url;                  // optional
-	const char *turn_username;             // optional
-	const char *turn_credential;           // optional
-	const char *source_name;               // OBS source name to share, must be non-NULL
+	const char *server_url;      // wss://... ; NULL = use compile-time default
+	const char *stun_url;        // optional
+	const char *turn_url;        // optional
+	const char *turn_username;   // optional
+	const char *turn_credential; // optional
+	// Either source_name (single source, legacy) OR video_source_names
+	// (null-terminated array) must be non-NULL. If both are set, the array
+	// wins and source_name is ignored.
+	const char *source_name;
+	const char *const *video_source_names;
 	const char *const *audio_source_names; // null-terminated; may be NULL
 	int video_bitrate_kbps;                // 0 → 6000
 	int max_receivers;                     // 0 → 4

@@ -28,6 +28,11 @@ struct tether_rx_subscription {
 	void *user;
 };
 
+struct mid_entry {
+	char mid[64];
+	bool is_video;
+};
+
 struct tether_receive_session {
 	char *token;
 	int refcount;
@@ -40,10 +45,31 @@ struct tether_receive_session {
 	pthread_mutex_t lock;
 	DARRAY(struct tether_rx_subscription *) subs;
 
+	// Set of remote mids we've seen at least one packet on. Populated as
+	// the on_video / on_audio callbacks land, so the source-properties UI
+	// can offer a live dropdown of available streams.
+	DARRAY(struct mid_entry) seen_mids;
+
 	// Stats: updated under lock when packets arrive. Reads also take the
 	// lock to get a coherent snapshot.
 	tether_receive_stats_t stats;
 };
+
+static void remember_mid_locked(tether_receive_session_t *s, const char *mid, bool is_video)
+{
+	if (!mid || !*mid) {
+		return;
+	}
+	for (size_t i = 0; i < s->seen_mids.num; ++i) {
+		if (strcmp(s->seen_mids.array[i].mid, mid) == 0) {
+			return;
+		}
+	}
+	struct mid_entry e = {0};
+	strncpy(e.mid, mid, sizeof(e.mid) - 1);
+	e.is_video = is_video;
+	da_push_back(s->seen_mids, &e);
+}
 
 // Global registry of live sessions, keyed by token (one session per token).
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -102,37 +128,37 @@ static void set_state(tether_receive_session_t *s, tether_receive_state_t new_st
 	bfree(copy);
 }
 
-static void wrtc_video_cb(void *user, const uint8_t *data, size_t size, int64_t pts, int tid)
+static void wrtc_video_cb(void *user, const uint8_t *data, size_t size, int64_t pts, int tid, const char *mid)
 {
 	tether_receive_session_t *s = user;
 	pthread_mutex_lock(&s->lock);
 	s->stats.video_bytes += size;
 	s->stats.video_packets += 1;
 	s->stats.last_update_ns = os_gettime_ns();
+	remember_mid_locked(s, mid, true);
 	size_t n = s->subs.num;
 	struct tether_rx_subscription **copy = n > 0 ? bmalloc(n * sizeof(*copy)) : NULL;
 	for (size_t i = 0; i < n; ++i) {
 		copy[i] = s->subs.array[i];
 	}
 	pthread_mutex_unlock(&s->lock);
-	// width/height/pts are not known here — the subscriber decodes the H.264
-	// NAL units and pulls the dimensions out of the SPS itself.
 	(void)tid;
 	for (size_t i = 0; i < n; ++i) {
 		if (copy[i]->on_video) {
-			copy[i]->on_video(copy[i]->user, data, size, 0, 0, pts);
+			copy[i]->on_video(copy[i]->user, data, size, 0, 0, pts, mid);
 		}
 	}
 	bfree(copy);
 }
 
-static void wrtc_audio_cb(void *user, const uint8_t *data, size_t size, int64_t pts, int tid)
+static void wrtc_audio_cb(void *user, const uint8_t *data, size_t size, int64_t pts, int tid, const char *mid)
 {
 	tether_receive_session_t *s = user;
 	pthread_mutex_lock(&s->lock);
 	s->stats.audio_bytes += size;
 	s->stats.audio_packets += 1;
 	s->stats.last_update_ns = os_gettime_ns();
+	remember_mid_locked(s, mid, false);
 	size_t n = s->subs.num;
 	struct tether_rx_subscription **copy = n > 0 ? bmalloc(n * sizeof(*copy)) : NULL;
 	for (size_t i = 0; i < n; ++i) {
@@ -141,10 +167,7 @@ static void wrtc_audio_cb(void *user, const uint8_t *data, size_t size, int64_t 
 	pthread_mutex_unlock(&s->lock);
 	for (size_t i = 0; i < n; ++i) {
 		if (copy[i]->on_audio) {
-			// Reuse track id as channel-count hint for now; subscribers
-			// pass it to their Opus decoder which carries the canonical
-			// channel layout in the SDP-negotiated track.
-			copy[i]->on_audio(copy[i]->user, data, size, 48000, 2, pts);
+			copy[i]->on_audio(copy[i]->user, data, size, 48000, 2, pts, mid);
 		}
 	}
 	bfree(copy);
@@ -285,6 +308,7 @@ static tether_receive_session_t *session_create_locked(const char *token)
 	s->state = TETHER_RX_STATE_CONNECTING;
 	pthread_mutex_init(&s->lock, NULL);
 	da_init(s->subs);
+	da_init(s->seen_mids);
 
 	char canon[TETHER_TOKEN_BUF];
 	if (!tether_token_normalise(token, canon, sizeof(canon))) {
@@ -351,9 +375,70 @@ static void session_destroy(tether_receive_session_t *s)
 		bfree(s->subs.array[i]);
 	}
 	da_free(s->subs);
+	da_free(s->seen_mids);
 	bfree(s->token);
 	pthread_mutex_destroy(&s->lock);
 	bfree(s);
+}
+
+static char **collect_mids_locked(tether_receive_session_t *s, bool want_video, size_t *count)
+{
+	size_t n = 0;
+	for (size_t i = 0; i < s->seen_mids.num; ++i) {
+		if (s->seen_mids.array[i].is_video == want_video) {
+			++n;
+		}
+	}
+	char **out = n > 0 ? bmalloc(n * sizeof(char *)) : NULL;
+	size_t j = 0;
+	for (size_t i = 0; i < s->seen_mids.num; ++i) {
+		if (s->seen_mids.array[i].is_video == want_video) {
+			out[j++] = bstrdup(s->seen_mids.array[i].mid);
+		}
+	}
+	if (count) {
+		*count = n;
+	}
+	return out;
+}
+
+char **tether_receive_session_video_mids(tether_receive_session_t *s, size_t *count)
+{
+	if (!s) {
+		if (count) {
+			*count = 0;
+		}
+		return NULL;
+	}
+	pthread_mutex_lock(&s->lock);
+	char **out = collect_mids_locked(s, true, count);
+	pthread_mutex_unlock(&s->lock);
+	return out;
+}
+
+char **tether_receive_session_audio_mids(tether_receive_session_t *s, size_t *count)
+{
+	if (!s) {
+		if (count) {
+			*count = 0;
+		}
+		return NULL;
+	}
+	pthread_mutex_lock(&s->lock);
+	char **out = collect_mids_locked(s, false, count);
+	pthread_mutex_unlock(&s->lock);
+	return out;
+}
+
+void tether_receive_session_free_mids(char **mids, size_t count)
+{
+	if (!mids) {
+		return;
+	}
+	for (size_t i = 0; i < count; ++i) {
+		bfree(mids[i]);
+	}
+	bfree(mids);
 }
 
 tether_receive_session_t *tether_receive_session_get(const char *token)
