@@ -73,6 +73,16 @@ function(_tether_relax_warnings_in_dir _dir)
         # vanilla C.
         XCODE_ATTRIBUTE_CLANG_ENABLE_MODULES NO
     )
+    # Belt-and-suspenders: even after killing the per-target werror
+    # property, some sub-deps (libsrtp's srtp2, usrsctp) inject -Werror
+    # directly into CMAKE_C_FLAGS or via their own target_compile_options.
+    # Append -Wno-error so the final compile command demotes everything
+    # back to warnings. INTERFACE_LIBRARY targets cannot carry compile
+    # options, so skip them.
+    get_target_property(_t_type ${_t} TYPE)
+    if(NOT _t_type STREQUAL "INTERFACE_LIBRARY")
+      target_compile_options(${_t} PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-error>)
+    endif()
   endforeach()
   get_property(_subdirs DIRECTORY ${_dir} PROPERTY SUBDIRECTORIES)
   foreach(_sd IN LISTS _subdirs)
@@ -94,6 +104,16 @@ if(NOT LibDataChannel_FOUND)
   set(USE_GNUTLS OFF CACHE BOOL "" FORCE)
   set(NO_WEBSOCKET OFF CACHE BOOL "" FORCE)
   set(NO_MEDIA OFF CACHE BOOL "" FORCE)
+  # Explicit overrides for each vendored sub-dep's own warnings-as-errors
+  # option — libdatachannel's CMakeLists honours these before we get a
+  # chance to set per-target properties:
+  #   libsrtp  → ENABLE_WARNINGS_AS_ERRORS (default ON in cisco/libsrtp)
+  #   usrsctp  → sctp_werror               (default 1 in paullouisageneau/usrsctp)
+  #   libjuice → WARNINGS_AS_ERRORS        (default OFF, set explicit for safety)
+  #   libdatachannel host → WARNINGS_AS_ERRORS (default OFF, same)
+  set(ENABLE_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+  set(sctp_werror OFF CACHE BOOL "" FORCE)
+  set(WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
   set(_tether_saved_werror ${CMAKE_COMPILE_WARNING_AS_ERROR})
   set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/deps/libdatachannel/CMakeLists.txt")
