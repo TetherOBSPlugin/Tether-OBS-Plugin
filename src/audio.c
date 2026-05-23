@@ -11,6 +11,7 @@
 #include <obs.h>
 #include <util/bmem.h>
 #include <util/darray.h>
+#include <util/platform.h>
 #include <util/threading.h>
 
 #include "log.h"

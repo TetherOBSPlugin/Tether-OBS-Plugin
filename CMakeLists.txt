@@ -81,4 +81,18 @@ if(WIN32)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE bcrypt)
 endif()
 
+# Opus is required for our multi-track audio encode/decode (used directly in
+# audio.c). Found via pkg-config on Linux/macOS; on Windows the obs-deps
+# bundle ships it.
+find_package(PkgConfig QUIET)
+if(PKG_CONFIG_FOUND)
+  pkg_check_modules(OPUS REQUIRED IMPORTED_TARGET opus)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE PkgConfig::OPUS)
+else()
+  find_library(OPUS_LIBRARY NAMES opus REQUIRED)
+  find_path(OPUS_INCLUDE_DIR opus/opus.h REQUIRED)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ${OPUS_LIBRARY})
+  target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${OPUS_INCLUDE_DIR})
+endif()
+
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

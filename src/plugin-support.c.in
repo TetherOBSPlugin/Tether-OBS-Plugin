@@ -1,0 +1,13 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Tether contributors
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * Configured from CMake — do not edit the generated copy. The @VAR@
+ * substitutions are filled from the bootstrap module which already
+ * extracted name and version out of buildspec.json.
+ */
+
+#include "plugin-support.h"
+
+const char *PLUGIN_NAME = "@_name@";
+const char *PLUGIN_VERSION = "@_version@";
