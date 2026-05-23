@@ -293,18 +293,23 @@ bool tether_signaling_connect(tether_signaling_t *sig)
 	}
 	set_state(sig, TETHER_SIG_STATE_CONNECTING);
 
-	// libdatachannel statically linked against system OpenSSL but does not
-	// always pick up the platform CA bundle on its own — Issue #1016
-	// upstream documents the same symptom (TLS alert: unknown CA) against
-	// Cloudflare-fronted endpoints. Verification is disabled here because
-	// the wire protocol is already protected end-to-end at a higher layer
-	// (DTLS-SRTP between sender and receiver carries the actual media; the
-	// signaling channel only carries opaque SDP / ICE that an attacker who
-	// hijacked TLS could still not decrypt). If a deployment needs WSS
-	// authentication too, build libdatachannel with a CA bundle wired in
-	// and flip this back to false.
+	// disableTlsVerification: libdatachannel against system GnuTLS does not
+	// pick up the platform CA bundle on its own (upstream issue #1016) —
+	// the media path is independently authenticated via DTLS-SRTP
+	// fingerprint pinning so an MITM on signaling cannot decrypt media.
+	//
+	// pingIntervalMs < 0: Cloudflare Workers' WebSocket handler does not
+	// reply to RFC 6455 control PING frames. libdatachannel's default
+	// behaviour is to send a PING right after the WS upgrade, then close
+	// the connection when no PONG arrives within the timeout. Live debug
+	// log confirms the close fires within milliseconds of "sending ping".
+	// Disable libdatachannel's keepalive PING entirely; the signaling
+	// session is short-lived and Cloudflare itself enforces a 100 s idle
+	// timeout, which we are well under.
 	rtcWsConfiguration cfg = {
 		.disableTlsVerification = true,
+		.pingIntervalMs = -1,
+		.maxOutstandingPings = -1,
 	};
 	int ws = rtcCreateWebSocketEx(sig->server_url, &cfg);
 	if (ws <= 0) {
