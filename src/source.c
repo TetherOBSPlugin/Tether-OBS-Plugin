@@ -9,6 +9,9 @@
 #include <obs.h>
 #include <string.h>
 
+#include <libavcodec/avcodec.h>
+#include <libavutil/imgutils.h>
+#include <libswscale/swscale.h>
 #include <util/bmem.h>
 #include <util/platform.h>
 #include <util/threading.h>
@@ -47,6 +50,16 @@ struct tether_source {
 	tether_signaling_t *sig;
 	tether_webrtc_t *wrtc;
 	tether_audio_receiver_t *audio;
+
+	// Video decoder state. The peer sends H.264 NAL units (currently the only
+	// codec we negotiate); libavcodec decodes them into AVFrames which we
+	// hand to OBS as VIDEO_FORMAT_I420 / NV12. The decoder is allocated
+	// lazily on the first push so we don't pay the cost when the source is
+	// merely added to the scene but not yet streaming.
+	AVCodecContext *vctx;
+	AVPacket *vpkt;
+	AVFrame *vframe;
+	pthread_mutex_t decoder_lock;
 
 	pthread_mutex_t lock;
 	volatile long connected;
@@ -142,15 +155,64 @@ static void start_connection(struct tether_source *s)
 	tether_signaling_connect(s->sig);
 }
 
+static bool init_video_decoder(struct tether_source *s)
+{
+	const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_H264);
+	if (!codec) {
+		tether_log_error("source: H.264 decoder not available in libavcodec");
+		return false;
+	}
+	s->vctx = avcodec_alloc_context3(codec);
+	if (!s->vctx) {
+		return false;
+	}
+	s->vctx->thread_count = 0; // auto-detect
+	if (avcodec_open2(s->vctx, codec, NULL) < 0) {
+		avcodec_free_context(&s->vctx);
+		return false;
+	}
+	s->vpkt = av_packet_alloc();
+	s->vframe = av_frame_alloc();
+	if (!s->vpkt || !s->vframe) {
+		if (s->vpkt) {
+			av_packet_free(&s->vpkt);
+		}
+		if (s->vframe) {
+			av_frame_free(&s->vframe);
+		}
+		avcodec_free_context(&s->vctx);
+		return false;
+	}
+	return true;
+}
+
+static void release_video_decoder(struct tether_source *s)
+{
+	if (s->vframe) {
+		av_frame_free(&s->vframe);
+	}
+	if (s->vpkt) {
+		av_packet_free(&s->vpkt);
+	}
+	if (s->vctx) {
+		avcodec_free_context(&s->vctx);
+	}
+}
+
 static void *create(obs_data_t *settings, obs_source_t *source)
 {
 	struct tether_source *s = bzalloc(sizeof(*s));
 	s->source = source;
 	pthread_mutex_init(&s->lock, NULL);
+	pthread_mutex_init(&s->decoder_lock, NULL);
 
 	tether_audio_receiver_config_t arcfg = {.sample_rate = 48000, .channels = 2};
 	s->audio = tether_audio_receiver_create(&arcfg);
 	tether_audio_receiver_bind_source(s->audio, source);
+
+	if (!init_video_decoder(s)) {
+		tether_log_warning("source: video decoder init failed; video will not be shown");
+	}
 
 	apply_settings(s, settings);
 	start_connection(s);
@@ -163,6 +225,11 @@ static void destroy(void *data)
 	pthread_mutex_lock(&s->lock);
 	disconnect_locked(s);
 	pthread_mutex_unlock(&s->lock);
+
+	pthread_mutex_lock(&s->decoder_lock);
+	release_video_decoder(s);
+	pthread_mutex_unlock(&s->decoder_lock);
+
 	if (s->audio) {
 		tether_audio_receiver_release(s->audio);
 	}
@@ -172,6 +239,7 @@ static void destroy(void *data)
 	bfree(s->turn_user);
 	bfree(s->turn_pass);
 	bfree(s->token);
+	pthread_mutex_destroy(&s->decoder_lock);
 	pthread_mutex_destroy(&s->lock);
 	bfree(s);
 }
@@ -322,29 +390,85 @@ static void wrtc_state(void *user, tether_webrtc_state_t st)
 	os_atomic_store_long(&s->connected, st == TETHER_WRTC_STATE_CONNECTED ? 1 : 0);
 }
 
+static enum video_format av_to_obs_video_format(enum AVPixelFormat fmt)
+{
+	switch (fmt) {
+	case AV_PIX_FMT_YUV420P:
+		return VIDEO_FORMAT_I420;
+	case AV_PIX_FMT_YUVJ420P:
+		return VIDEO_FORMAT_I420; // OBS handles full-range via colour_range
+	case AV_PIX_FMT_NV12:
+		return VIDEO_FORMAT_NV12;
+	case AV_PIX_FMT_YUV422P:
+		return VIDEO_FORMAT_I422;
+	case AV_PIX_FMT_YUV444P:
+		return VIDEO_FORMAT_I444;
+	default:
+		return VIDEO_FORMAT_NONE;
+	}
+}
+
+static void deliver_decoded_frame(struct tether_source *s, int64_t pts)
+{
+	enum video_format obs_fmt = av_to_obs_video_format(s->vframe->format);
+	if (obs_fmt == VIDEO_FORMAT_NONE) {
+		// libavcodec gave us a format OBS cannot consume directly. The
+		// vast majority of H.264 streams decode to YUV420P / NV12, so we
+		// simply drop here rather than wire sws_scale conversion for an
+		// edge case; if this ever fires in production we'll see it in
+		// the log and add the conversion path.
+		tether_log_warning("source: decoder produced unhandled pix_fmt=%d", s->vframe->format);
+		return;
+	}
+
+	struct obs_source_frame frame = {0};
+	frame.format = obs_fmt;
+	frame.width = (uint32_t)s->vframe->width;
+	frame.height = (uint32_t)s->vframe->height;
+	frame.timestamp = pts > 0 ? (uint64_t)pts : os_gettime_ns();
+	frame.full_range = (s->vframe->color_range == AVCOL_RANGE_JPEG);
+	for (int p = 0; p < MAX_AV_PLANES && s->vframe->data[p]; ++p) {
+		frame.data[p] = s->vframe->data[p];
+		frame.linesize[p] = (uint32_t)s->vframe->linesize[p];
+	}
+
+	obs_source_output_video(s->source, &frame);
+}
+
 static void wrtc_video(void *user, const uint8_t *data, size_t size, int64_t pts, int tid)
 {
-	(void)tid;
+	UNUSED_PARAMETER(tid);
 	struct tether_source *s = user;
+	if (!data || size == 0) {
+		return;
+	}
 
-	// The depayloaded frame is delivered as encoded bitstream; we feed it
-	// to OBS as an async encoded source. OBS does not accept encoded
-	// frames directly for input sources — for H.264 we rely on OBS's
-	// built-in decoder via obs_source_output_video2 with the decoded YUV
-	// produced by libdatachannel's media handler. The codepath below
-	// assumes pre-decoded NV12 frames as a fallback; a hardware-accelerated
-	// path would parse the NALUs first.
-	struct obs_source_frame frame = {0};
-	frame.format = VIDEO_FORMAT_NV12;
-	frame.width = 1280;
-	frame.height = 720;
-	frame.data[0] = (uint8_t *)data;
-	frame.data[1] = (uint8_t *)data + 1280 * 720;
-	frame.linesize[0] = 1280;
-	frame.linesize[1] = 1280;
-	frame.timestamp = (uint64_t)pts;
-	(void)size;
-	obs_source_output_video(s->source, &frame);
+	pthread_mutex_lock(&s->decoder_lock);
+	if (!s->vctx) {
+		pthread_mutex_unlock(&s->decoder_lock);
+		return;
+	}
+
+	// av_packet_from_data requires a malloc'd buffer it can take ownership
+	// of; we instead point the packet at the caller's memory via
+	// AVPacket's data/size fields, which is valid for the lifetime of the
+	// avcodec_send_packet call (the codec copies what it needs).
+	av_packet_unref(s->vpkt);
+	s->vpkt->data = (uint8_t *)data;
+	s->vpkt->size = (int)size;
+	s->vpkt->pts = pts;
+	s->vpkt->dts = pts;
+
+	int rc = avcodec_send_packet(s->vctx, s->vpkt);
+	if (rc < 0 && rc != AVERROR(EAGAIN)) {
+		pthread_mutex_unlock(&s->decoder_lock);
+		return; // decoder hiccup; next keyframe will resync
+	}
+	while ((rc = avcodec_receive_frame(s->vctx, s->vframe)) == 0) {
+		deliver_decoded_frame(s, pts);
+		av_frame_unref(s->vframe);
+	}
+	pthread_mutex_unlock(&s->decoder_lock);
 }
 
 static void wrtc_audio(void *user, const uint8_t *data, size_t size, int64_t pts, int tid)

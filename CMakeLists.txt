@@ -176,6 +176,23 @@ if(WIN32)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE bcrypt)
 endif()
 
+# libavcodec / libavutil / libswscale provide the H.264 decoder we use on the
+# receiver side to turn libdatachannel-depayloaded NAL units into raw video
+# frames OBS can render. They come from FFmpeg, which the obs-deps bundles
+# ship on Windows / macOS, and which Linux pulls in via system pkg-config.
+find_package(PkgConfig QUIET)
+if(PKG_CONFIG_FOUND)
+  pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET libavcodec libavutil libswscale)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE PkgConfig::LIBAV)
+else()
+  find_library(AVCODEC_LIBRARY NAMES avcodec HINTS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES lib lib64 REQUIRED)
+  find_library(AVUTIL_LIBRARY NAMES avutil HINTS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES lib lib64 REQUIRED)
+  find_library(SWSCALE_LIBRARY NAMES swscale HINTS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES lib lib64 REQUIRED)
+  find_path(AVCODEC_INCLUDE_DIR libavcodec/avcodec.h HINTS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES include REQUIRED)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ${AVCODEC_LIBRARY} ${AVUTIL_LIBRARY} ${SWSCALE_LIBRARY})
+  target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${AVCODEC_INCLUDE_DIR})
+endif()
+
 # Opus is required for our multi-track audio encode/decode (used directly in
 # audio.c). The obs-deps Windows bundle ships only opus headers, not the .lib,
 # so we cannot rely on find_library across all three platforms. Fetch opus from
