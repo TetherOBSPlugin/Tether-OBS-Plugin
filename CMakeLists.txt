@@ -70,6 +70,11 @@ if(NOT LibDataChannel_FOUND)
   set(CMAKE_COMPILE_WARNING_AS_ERROR ${_tether_saved_werror})
 endif()
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE LibDataChannel::LibDataChannel)
+# libdatachannel exposes the WebSocket + media APIs only when the matching
+# defines are set on the consuming translation unit. Linux picks them up via
+# INTERFACE propagation, macOS sometimes does not — set them directly so the
+# build is deterministic across all three runners.
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE RTC_ENABLE_WEBSOCKET=1 RTC_ENABLE_MEDIA=1)
 
 target_sources(
   ${CMAKE_PROJECT_NAME}
@@ -102,14 +107,15 @@ endif()
 
 # Opus is required for our multi-track audio encode/decode (used directly in
 # audio.c). Found via pkg-config on Linux/macOS; on Windows the obs-deps
-# bundle ships it.
+# bundle ships opus.lib under its own prefix, so we hint find_library at
+# CMAKE_PREFIX_PATH which the OBS template populates with the obs-deps root.
 find_package(PkgConfig QUIET)
 if(PKG_CONFIG_FOUND)
   pkg_check_modules(OPUS REQUIRED IMPORTED_TARGET opus)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE PkgConfig::OPUS)
 else()
-  find_library(OPUS_LIBRARY NAMES opus REQUIRED)
-  find_path(OPUS_INCLUDE_DIR opus/opus.h REQUIRED)
+  find_library(OPUS_LIBRARY NAMES opus HINTS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES lib lib64 REQUIRED)
+  find_path(OPUS_INCLUDE_DIR opus/opus.h HINTS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES include REQUIRED)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ${OPUS_LIBRARY})
   target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${OPUS_INCLUDE_DIR})
 endif()
