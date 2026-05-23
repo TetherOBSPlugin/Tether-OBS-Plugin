@@ -171,6 +171,8 @@ target_sources(
     src/hub-dialog.hpp
     src/receive-dialog.cpp
     src/receive-dialog.hpp
+    src/known-tokens.c
+    src/known-tokens.h
     src/properties.c
     src/properties.h
     src/log.h

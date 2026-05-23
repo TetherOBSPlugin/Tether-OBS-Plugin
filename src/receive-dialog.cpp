@@ -6,6 +6,7 @@
 #include "receive-dialog.hpp"
 
 extern "C" {
+#include "known-tokens.h"
 #include <obs-module.h>
 #include <obs.h>
 }
@@ -13,7 +14,9 @@ extern "C" {
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDialog>
+#include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QMetaObject>
 #include <QPointer>
@@ -30,7 +33,12 @@ public:
 
 private:
 	void refreshSessionList();
+	void onRegisterToken();
 
+	QLineEdit *tokenField_ = nullptr;
+	QPushButton *registerBtn_ = nullptr;
+	QListWidget *tokenList_ = nullptr;
+	QPushButton *forgetBtn_ = nullptr;
 	QListWidget *sessionList_ = nullptr;
 	QPushButton *disconnectBtn_ = nullptr;
 	QLabel *hintLabel_ = nullptr;
@@ -78,6 +86,37 @@ ReceiveDialog::ReceiveDialog() : QDialog(nullptr)
 
 	auto *root = new QVBoxLayout(this);
 
+	// --- Top: register a token so Tether-Quelle sources can pick it up. ---
+	auto *tokenLabel = new QLabel(fromTr("Receive.TokenLabel"), this);
+	QFont tokenFont = tokenLabel->font();
+	tokenFont.setBold(true);
+	tokenLabel->setFont(tokenFont);
+	root->addWidget(tokenLabel);
+
+	auto *tokenRow = new QHBoxLayout();
+	tokenField_ = new QLineEdit(this);
+	tokenField_->setPlaceholderText(fromTr("Receive.TokenPlaceholder"));
+	tokenField_->setStyleSheet(QStringLiteral("font-family: monospace; font-size: 14pt; letter-spacing: 0.1em;"));
+	registerBtn_ = new QPushButton(fromTr("Receive.Register"), this);
+	tokenRow->addWidget(tokenField_, 1);
+	tokenRow->addWidget(registerBtn_);
+	root->addLayout(tokenRow);
+
+	auto *knownLabel = new QLabel(fromTr("Receive.KnownTokens"), this);
+	root->addWidget(knownLabel);
+	tokenList_ = new QListWidget(this);
+	tokenList_->setMaximumHeight(110);
+	root->addWidget(tokenList_);
+	forgetBtn_ = new QPushButton(fromTr("Receive.Forget"), this);
+	forgetBtn_->setEnabled(false);
+	root->addWidget(forgetBtn_);
+
+	hintLabel_ = new QLabel(fromTr("Receive.Hint"), this);
+	hintLabel_->setWordWrap(true);
+	hintLabel_->setStyleSheet(QStringLiteral("color: gray;"));
+	root->addWidget(hintLabel_);
+
+	root->addSpacing(12);
 	auto *sessionsLabel = new QLabel(fromTr("Receive.Sessions"), this);
 	root->addWidget(sessionsLabel);
 	sessionList_ = new QListWidget(this);
@@ -87,10 +126,19 @@ ReceiveDialog::ReceiveDialog() : QDialog(nullptr)
 	disconnectBtn_->setEnabled(false);
 	root->addWidget(disconnectBtn_);
 
-	hintLabel_ = new QLabel(fromTr("Receive.Hint"), this);
-	hintLabel_->setWordWrap(true);
-	hintLabel_->setStyleSheet(QStringLiteral("color: gray;"));
-	root->addWidget(hintLabel_);
+	connect(registerBtn_, &QPushButton::clicked, this, &ReceiveDialog::onRegisterToken);
+	connect(tokenField_, &QLineEdit::returnPressed, this, &ReceiveDialog::onRegisterToken);
+	connect(tokenList_, &QListWidget::currentRowChanged, this,
+		[this](int row) { forgetBtn_->setEnabled(row >= 0); });
+	connect(forgetBtn_, &QPushButton::clicked, this, [this] {
+		QListWidgetItem *it = tokenList_->currentItem();
+		if (!it) {
+			return;
+		}
+		const QByteArray ba = it->text().toUtf8();
+		tether_known_tokens_remove(ba.constData());
+		refreshSessionList();
+	});
 
 	connect(sessionList_, &QListWidget::currentRowChanged, this,
 		[this](int row) { disconnectBtn_->setEnabled(row >= 0); });
@@ -121,18 +169,46 @@ ReceiveDialog::ReceiveDialog() : QDialog(nullptr)
 
 void ReceiveDialog::refreshSessionList()
 {
-	QString selectedUuid;
+	QString selectedSession;
 	if (QListWidgetItem *cur = sessionList_->currentItem()) {
-		selectedUuid = cur->data(Qt::UserRole).toString();
+		selectedSession = cur->data(Qt::UserRole).toString();
 	}
 	sessionList_->clear();
 	enumerate_tether_sources(sessionList_);
 	for (int i = 0; i < sessionList_->count(); ++i) {
-		if (sessionList_->item(i)->data(Qt::UserRole).toString() == selectedUuid) {
+		if (sessionList_->item(i)->data(Qt::UserRole).toString() == selectedSession) {
 			sessionList_->setCurrentRow(i);
 			break;
 		}
 	}
+
+	// Sync the known-tokens list (right-side pool) with the registry.
+	QString selectedToken;
+	if (QListWidgetItem *cur = tokenList_->currentItem()) {
+		selectedToken = cur->text();
+	}
+	tokenList_->clear();
+	size_t n = 0;
+	char **tokens = tether_known_tokens_snapshot(&n);
+	for (size_t i = 0; i < n; ++i) {
+		auto *item = new QListWidgetItem(QString::fromUtf8(tokens[i]), tokenList_);
+		if (QString::fromUtf8(tokens[i]) == selectedToken) {
+			tokenList_->setCurrentItem(item);
+		}
+	}
+	tether_known_tokens_free_snapshot(tokens, n);
+}
+
+void ReceiveDialog::onRegisterToken()
+{
+	const QString token = tokenField_->text().trimmed().toUpper();
+	if (token.isEmpty()) {
+		return;
+	}
+	const QByteArray ba = token.toUtf8();
+	tether_known_tokens_add(ba.constData());
+	tokenField_->clear();
+	refreshSessionList();
 }
 
 } // namespace

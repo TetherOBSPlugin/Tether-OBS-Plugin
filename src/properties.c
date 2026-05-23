@@ -8,6 +8,7 @@
 #include <obs-module.h>
 #include <obs.h>
 
+#include "known-tokens.h"
 #include "log.h"
 
 // Compile-time managed default. Replace the subdomain with the one your
@@ -67,8 +68,18 @@ obs_properties_t *tether_properties_for_receiver(obs_source_t *src)
 	add_connection_group(p);
 
 	obs_properties_t *g = obs_properties_create();
-	obs_property_t *t = obs_properties_add_text(g, "token", obs_module_text("Token.Paste"), OBS_TEXT_DEFAULT);
+	// Editable combo: pulls from tokens the user registered in
+	// Tools→Tether→Receive, but also allows free-form entry so a fresh token
+	// can be pasted without first walking through the dialog.
+	obs_property_t *t = obs_properties_add_list(g, "token", obs_module_text("Token.Paste"), OBS_COMBO_TYPE_EDITABLE,
+						    OBS_COMBO_FORMAT_STRING);
 	obs_property_set_long_description(t, obs_module_text("Token.Paste.Description"));
+	size_t n = 0;
+	char **known = tether_known_tokens_snapshot(&n);
+	for (size_t i = 0; i < n; ++i) {
+		obs_property_list_add_string(t, known[i], known[i]);
+	}
+	tether_known_tokens_free_snapshot(known, n);
 	obs_properties_add_group(p, "token_group", obs_module_text("Settings.Group.Source"), OBS_GROUP_NORMAL, g);
 
 	add_advanced(p);
