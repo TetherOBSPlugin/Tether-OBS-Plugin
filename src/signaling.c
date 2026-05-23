@@ -30,7 +30,7 @@
 
 #include "signaling.h"
 
-#include <stdatomic.h>
+#include <util/threading.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,7 +49,7 @@ struct tether_signaling {
 	char *token;
 
 	int ws; // libdatachannel websocket handle, -1 if unset
-	atomic_int state;
+	volatile long state;
 
 	pthread_mutex_t lock;
 };
@@ -65,7 +65,7 @@ static void emit(tether_signaling_t *sig, tether_signaling_event_t evt, const ch
 
 static void set_state(tether_signaling_t *sig, tether_signaling_state_t s)
 {
-	tether_signaling_state_t prev = (tether_signaling_state_t)atomic_exchange(&sig->state, s);
+	tether_signaling_state_t prev = (tether_signaling_state_t)os_atomic_exchange_long(&sig->state, s);
 	if (prev != s) {
 		emit(sig, TETHER_SIG_EVT_STATE_CHANGED, NULL, NULL);
 	}
@@ -266,7 +266,7 @@ tether_signaling_t *tether_signaling_create(const tether_signaling_config_t *cfg
 	sig->server_url = bstrdup(cfg->server_url);
 	sig->display_name = bstrdup(cfg->display_name ? cfg->display_name : "");
 	sig->ws = -1;
-	atomic_init(&sig->state, TETHER_SIG_STATE_DISCONNECTED);
+	sig->state = TETHER_SIG_STATE_DISCONNECTED;
 	pthread_mutex_init(&sig->lock, NULL);
 	return sig;
 }
@@ -322,7 +322,7 @@ void tether_signaling_disconnect(tether_signaling_t *sig)
 
 tether_signaling_state_t tether_signaling_state(const tether_signaling_t *sig)
 {
-	return sig ? (tether_signaling_state_t)atomic_load(&((tether_signaling_t *)sig)->state)
+	return sig ? (tether_signaling_state_t)os_atomic_load_long(&((tether_signaling_t *)sig)->state)
 		   : TETHER_SIG_STATE_DISCONNECTED;
 }
 

@@ -7,7 +7,6 @@
 
 #include <obs-module.h>
 #include <obs.h>
-#include <stdatomic.h>
 #include <string.h>
 
 #include <util/bmem.h>
@@ -50,7 +49,7 @@ struct tether_source {
 	tether_audio_receiver_t *audio;
 
 	pthread_mutex_t lock;
-	atomic_int connected;
+	volatile long connected;
 };
 
 static const char *get_name(void *unused)
@@ -320,7 +319,7 @@ static void wrtc_local_ice(void *user, const char *cand, const char *mid, int ml
 static void wrtc_state(void *user, tether_webrtc_state_t st)
 {
 	struct tether_source *s = user;
-	atomic_store(&s->connected, st == TETHER_WRTC_STATE_CONNECTED ? 1 : 0);
+	os_atomic_store_long(&s->connected, st == TETHER_WRTC_STATE_CONNECTED ? 1 : 0);
 }
 
 static void wrtc_video(void *user, const uint8_t *data, size_t size, int64_t pts, int tid)

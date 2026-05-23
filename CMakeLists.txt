@@ -49,6 +49,31 @@ endif()
 # not written under the OBS template's -Wunused-parameter -Werror umbrella, so
 # we drop warnings-as-errors just for that subtree. Our own target was already
 # created above with the strict default, so this only affects the deps.
+# Helper: strip every warning-as-error setting from a foreign target tree.
+# CMAKE_COMPILE_WARNING_AS_ERROR alone isn't enough on macOS because Xcode picks
+# up CMAKE_XCODE_ATTRIBUTE_GCC_TREAT_WARNINGS_AS_ERRORS / WARNING_CFLAGS from the
+# OBS template at the project level and applies them to every target including
+# FetchContent imports.
+function(_tether_relax_warnings_in_dir _dir)
+  if(NOT _dir OR NOT EXISTS ${_dir})
+    return()
+  endif()
+  get_property(_targets DIRECTORY ${_dir} PROPERTY BUILDSYSTEM_TARGETS)
+  foreach(_t IN LISTS _targets)
+    set_target_properties(
+      ${_t}
+      PROPERTIES
+        COMPILE_WARNING_AS_ERROR OFF
+        XCODE_ATTRIBUTE_GCC_TREAT_WARNINGS_AS_ERRORS NO
+        XCODE_ATTRIBUTE_WARNING_CFLAGS ""
+    )
+  endforeach()
+  get_property(_subdirs DIRECTORY ${_dir} PROPERTY SUBDIRECTORIES)
+  foreach(_sd IN LISTS _subdirs)
+    _tether_relax_warnings_in_dir(${_sd})
+  endforeach()
+endfunction()
+
 set(_TETHER_LDC_TAG "v0.23.1")
 find_package(LibDataChannel CONFIG QUIET)
 if(NOT LibDataChannel_FOUND)
@@ -62,6 +87,7 @@ if(NOT LibDataChannel_FOUND)
   set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/deps/libdatachannel/CMakeLists.txt")
     add_subdirectory(deps/libdatachannel EXCLUDE_FROM_ALL)
+    _tether_relax_warnings_in_dir(${CMAKE_CURRENT_SOURCE_DIR}/deps/libdatachannel)
   else()
     include(FetchContent)
     FetchContent_Declare(
@@ -72,6 +98,8 @@ if(NOT LibDataChannel_FOUND)
       GIT_SUBMODULES_RECURSE TRUE
     )
     FetchContent_MakeAvailable(libdatachannel)
+    FetchContent_GetProperties(libdatachannel SOURCE_DIR _ldc_src)
+    _tether_relax_warnings_in_dir(${_ldc_src})
   endif()
   set(CMAKE_COMPILE_WARNING_AS_ERROR ${_tether_saved_werror})
 endif()
@@ -127,6 +155,8 @@ set(_tether_saved_werror_opus ${CMAKE_COMPILE_WARNING_AS_ERROR})
 set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
 FetchContent_Declare(opus GIT_REPOSITORY https://github.com/xiph/opus.git GIT_TAG v1.5.2 GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(opus)
+FetchContent_GetProperties(opus SOURCE_DIR _opus_src)
+_tether_relax_warnings_in_dir(${_opus_src})
 set(CMAKE_COMPILE_WARNING_AS_ERROR ${_tether_saved_werror_opus})
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE opus)
 

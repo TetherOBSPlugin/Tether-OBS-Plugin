@@ -5,7 +5,7 @@
 
 #include "webrtc.h"
 
-#include <stdatomic.h>
+#include <util/threading.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,7 +27,7 @@ struct tether_webrtc {
 	tether_webrtc_config_t cfg;
 
 	int pc; // libdatachannel peer-connection handle
-	atomic_int state;
+	volatile long state;
 
 	DARRAY(struct track_entry) tracks;
 	int next_track_id;
@@ -36,11 +36,11 @@ struct tether_webrtc {
 	pthread_mutex_t lock;
 };
 
-static atomic_int g_init_count = 0;
+static volatile long g_init_count = 0;
 
 bool tether_webrtc_global_init(void)
 {
-	if (atomic_fetch_add(&g_init_count, 1) == 0) {
+	if (os_atomic_inc_long(&g_init_count) == 1) {
 		rtcInitLogger(RTC_LOG_WARNING, NULL);
 		tether_log_info("webrtc: libdatachannel initialised");
 	}
@@ -49,7 +49,7 @@ bool tether_webrtc_global_init(void)
 
 void tether_webrtc_global_shutdown(void)
 {
-	if (atomic_fetch_sub(&g_init_count, 1) == 1) {
+	if (os_atomic_dec_long(&g_init_count) == 0) {
 		rtcCleanup();
 		tether_log_info("webrtc: libdatachannel cleaned up");
 	}
@@ -81,7 +81,7 @@ static void RTC_API on_state_change(int pc, rtcState state, void *user)
 		mapped = TETHER_WRTC_STATE_NEW;
 		break;
 	}
-	atomic_store(&w->state, mapped);
+	os_atomic_store_long(&w->state, mapped);
 	if (w->cfg.on_state) {
 		w->cfg.on_state(w->cfg.user, mapped);
 	}
@@ -159,7 +159,7 @@ tether_webrtc_t *tether_webrtc_create(const tether_webrtc_config_t *cfg)
 	tether_webrtc_t *w = bzalloc(sizeof(*w));
 	w->cfg = *cfg;
 	w->next_track_id = 1;
-	atomic_init(&w->state, TETHER_WRTC_STATE_NEW);
+	w->state = TETHER_WRTC_STATE_NEW;
 	pthread_mutex_init(&w->lock, NULL);
 
 	const char *ice_servers[2] = {NULL, NULL};
@@ -381,5 +381,6 @@ bool tether_webrtc_local_fingerprint(tether_webrtc_t *w, char *out, size_t out_s
 
 tether_webrtc_state_t tether_webrtc_state(const tether_webrtc_t *w)
 {
-	return w ? (tether_webrtc_state_t)atomic_load(&((tether_webrtc_t *)w)->state) : TETHER_WRTC_STATE_CLOSED;
+	return w ? (tether_webrtc_state_t)os_atomic_load_long(&((tether_webrtc_t *)w)->state)
+		 : TETHER_WRTC_STATE_CLOSED;
 }

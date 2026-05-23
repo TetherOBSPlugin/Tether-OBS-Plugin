@@ -7,7 +7,6 @@
 
 #include <obs-module.h>
 #include <obs.h>
-#include <stdatomic.h>
 #include <string.h>
 
 #include <util/bmem.h>
