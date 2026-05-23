@@ -37,12 +37,13 @@
     {
       "name": "macos-ci",
       "inherits": ["macos"],
-      "displayName": "macOS Universal CI build",
-      "description": "Build for macOS 12.0+ (Universal binary) for CI",
+      "displayName": "macOS arm64 CI build",
+      "description": "macOS 12.0+ on Apple Silicon CI runners (single-arch). brew on macos-15 runners ships openssl@3 as arm64 only, so a Universal link fails on the x86_64 slice. Local devs / release tooling still build Universal via the non-CI 'macos' preset.",
       "generator": "Xcode",
       "cacheVariables": {
         "CMAKE_COMPILE_WARNING_AS_ERROR": true,
-        "ENABLE_CCACHE": true
+        "ENABLE_CCACHE": true,
+        "CMAKE_OSX_ARCHITECTURES": "arm64"
       }
     },
     {
