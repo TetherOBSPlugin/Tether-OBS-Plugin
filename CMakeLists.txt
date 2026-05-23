@@ -81,7 +81,14 @@ function(_tether_relax_warnings_in_dir _dir)
     # options, so skip them.
     get_target_property(_t_type ${_t} TYPE)
     if(NOT _t_type STREQUAL "INTERFACE_LIBRARY")
-      target_compile_options(${_t} PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-error>)
+      # MSVC uses /WX (and /WX-) instead of -Werror/-Wno-error; CMake would
+      # mangle a bare -Wno-error into /Wno-error which cl.exe parses as a
+      # numeric warning-level (D8021). Pick the right syntax per compiler.
+      if(MSVC)
+        target_compile_options(${_t} PRIVATE /WX-)
+      else()
+        target_compile_options(${_t} PRIVATE -Wno-error)
+      endif()
     endif()
   endforeach()
   get_property(_subdirs DIRECTORY ${_dir} PROPERTY SUBDIRECTORIES)
