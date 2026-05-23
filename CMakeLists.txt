@@ -74,8 +74,13 @@ function(_tether_relax_warnings_in_dir _dir)
   endforeach()
 endfunction()
 
+# obs-deps ships LibDataChannel 0.21.0 for macOS and Windows, which predates
+# rtcCreateWebSocketEx / rtcWsConfiguration. Require the version that has the
+# WebSocket API we depend on so find_package skips the obs-deps copy and
+# FetchContent takes over.
+set(_TETHER_LDC_MIN "0.23")
 set(_TETHER_LDC_TAG "v0.23.1")
-find_package(LibDataChannel CONFIG QUIET)
+find_package(LibDataChannel ${_TETHER_LDC_MIN} CONFIG QUIET)
 if(NOT LibDataChannel_FOUND)
   set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
   set(NO_EXAMPLES ON CACHE BOOL "" FORCE)
