@@ -238,20 +238,16 @@ static void RTC_API on_error(int id, const char *error, void *user)
 
 static void RTC_API on_message(int id, const char *msg, int size, void *user)
 {
-	(void)id;
+	UNUSED_PARAMETER(id);
 	tether_signaling_t *sig = user;
-	if (!msg || size <= 0) {
+	if (!msg) {
 		return;
 	}
-	// libdatachannel passes null-terminated text frames; binary frames have
-	// size > 0 but are not used in our protocol.
-	if (size > 0 && msg[size] != '\0') {
-		char *tmp = bmalloc((size_t)size + 1);
-		memcpy(tmp, msg, (size_t)size);
-		tmp[size] = '\0';
-		handle_message(sig, tmp);
-		bfree(tmp);
-	} else {
+	// libdatachannel's WebSocket callback uses size < 0 for text frames
+	// (|size| includes the trailing NUL) and size > 0 for binary frames.
+	// Our wire protocol is JSON over text, so we treat negative-size as a
+	// NUL-terminated string and ignore positive-size binary frames.
+	if (size < 0) {
 		handle_message(sig, msg);
 	}
 }

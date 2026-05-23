@@ -181,26 +181,50 @@ SenderDialog::~SenderDialog()
 
 void SenderDialog::populateSourceList()
 {
-	auto enumCb = [](void *param, obs_source_t *src) -> bool {
-		auto *self = static_cast<SenderDialog *>(param);
+	auto add_source = [this](obs_source_t *src) {
 		const uint32_t caps = obs_source_get_output_flags(src);
 		const bool is_video = (caps & OBS_SOURCE_VIDEO) != 0;
 		const bool is_audio = (caps & OBS_SOURCE_AUDIO) != 0;
 		const char *name = obs_source_get_name(src);
 		if (!name) {
-			return true;
+			return;
 		}
 		if (is_video) {
-			self->sourceCombo_->addItem(QString::fromUtf8(name));
+			const QString qname = QString::fromUtf8(name);
+			if (sourceCombo_->findText(qname) < 0) {
+				sourceCombo_->addItem(qname);
+			}
 		}
 		if (is_audio) {
-			auto *item = new QListWidgetItem(QString::fromUtf8(name), self->audioList_);
+			const QString qname = QString::fromUtf8(name);
+			for (int i = 0; i < audioList_->count(); ++i) {
+				if (audioList_->item(i)->text() == qname) {
+					return; // already added
+				}
+			}
+			auto *item = new QListWidgetItem(qname, audioList_);
 			item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
 			item->setCheckState(Qt::Unchecked);
 		}
+	};
+
+	auto enum_cb = [](void *param, obs_source_t *src) -> bool {
+		auto &fn = *static_cast<decltype(add_source) *>(param);
+		fn(src);
 		return true;
 	};
-	obs_enum_sources(enumCb, this);
+	obs_enum_sources(enum_cb, &add_source);
+
+	// OBS keeps the global audio I/O on the well-known output channels 1..6
+	// (channel 0 is the main video composition). obs_enum_sources skips
+	// these, so the Desktop Audio / Microphone tracks visible in the user's
+	// Audio Mixer never showed up in the dialog. Pull them in explicitly.
+	for (uint32_t channel = 1; channel < MAX_CHANNELS; ++channel) {
+		if (obs_source_t *src = obs_get_output_source(channel)) {
+			add_source(src);
+			obs_source_release(src);
+		}
+	}
 }
 
 void SenderDialog::onGenerateToken()
