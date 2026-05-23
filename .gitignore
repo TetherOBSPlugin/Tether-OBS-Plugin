@@ -1,0 +1,37 @@
+# Exclude everything by default — explicit allow-list below
+/*
+
+# Allowed top-level entries
+!/.github
+!/build-aux
+!/cmake
+!/data
+!/src
+!/backend
+!.clang-format
+!.editorconfig
+!.gersemirc
+!.gitignore
+!buildspec.json
+!CMakeLists.txt
+!CMakePresets.json
+!LICENSE
+!README.md
+!CONTRIBUTING.md
+!CODE_OF_CONDUCT.md
+!SECURITY.md
+!CHANGELOG.md
+
+# Build & tooling artifacts (root-anchored so build-aux/ stays included)
+/build/
+/build_*/
+/out/
+*.lock.json
+.DS_Store
+/cmake/.CMakeBuildNumber
+
+# Backend (Cloudflare Workers) — node, build outputs
+backend/node_modules/
+backend/dist/
+backend/.wrangler/
+backend/.dev.vars
