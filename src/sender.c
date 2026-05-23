@@ -50,7 +50,7 @@ struct tether_sender {
 	char *turn_url;
 	char *turn_user;
 	char *turn_pass;
-	int mode;             // 0 = standard, 1 = twitch ST
+	int mode; // 0 = standard, 1 = twitch ST
 	int video_codec_id;
 	int max_bitrate;
 	int max_receivers;
@@ -86,13 +86,11 @@ static void session_video(void *u, const uint8_t *d, size_t n, int64_t p, int t)
 static void session_audio(void *u, const uint8_t *d, size_t n, int64_t p, int t);
 
 static void on_admission_changed(void *user, const tether_peer_t *peer);
-static void on_signaling_event(void *user, tether_signaling_event_t evt,
-			       const tether_signaling_msg_t *msg);
+static void on_signaling_event(void *user, tether_signaling_event_t evt, const tether_signaling_msg_t *msg);
 
 // --- helpers ---
 
-static struct receiver_session *find_session_locked(struct tether_sender *s,
-						    const char *peer_id)
+static struct receiver_session *find_session_locked(struct tether_sender *s, const char *peer_id)
 {
 	for (size_t i = 0; i < s->sessions.num; ++i) {
 		if (strcmp(s->sessions.array[i]->peer_id, peer_id) == 0) {
@@ -155,9 +153,7 @@ static void start_signaling_locked(struct tether_sender *s)
 	s->adm = tether_admission_create(&acfg);
 
 	tether_signaling_config_t scfg = {
-		.server_url = s->server_url && *s->server_url
-				      ? s->server_url
-				      : tether_default_server_url(),
+		.server_url = s->server_url && *s->server_url ? s->server_url : tether_default_server_url(),
 		.role = TETHER_ROLE_SENDER,
 		.display_name = obs_source_get_name(s->parent),
 		.token_ttl_minutes = s->token_ttl_minutes,
@@ -169,7 +165,7 @@ static void start_signaling_locked(struct tether_sender *s)
 	tether_signaling_connect(s->sig);
 
 	tether_audio_sender_config_t arcfg = {
-		.webrtc = NULL,  // attached per-session below
+		.webrtc = NULL, // attached per-session below
 		.sample_rate = 48000,
 		.channels = 2,
 		.bitrate_kbps = 96,
@@ -250,8 +246,7 @@ static void update(void *data, obs_data_t *settings)
 static void defaults(obs_data_t *settings)
 {
 	obs_data_set_default_string(settings, "server_url", "");
-	obs_data_set_default_string(settings, "stun_url",
-				    "stun:stun.cloudflare.com:3478");
+	obs_data_set_default_string(settings, "stun_url", "stun:stun.cloudflare.com:3478");
 	obs_data_set_default_int(settings, "mode", 0);
 	obs_data_set_default_int(settings, "video_codec", (int)TETHER_CODEC_H264);
 	obs_data_set_default_int(settings, "max_bitrate", 6000);
@@ -298,9 +293,7 @@ static struct obs_source_frame *filter_video(void *data, struct obs_source_frame
 static void create_session(struct tether_sender *s, const tether_peer_t *peer)
 {
 	tether_webrtc_config_t wcfg = {
-		.stun_url = s->stun_url && *s->stun_url
-				    ? s->stun_url
-				    : "stun:stun.cloudflare.com:3478",
+		.stun_url = s->stun_url && *s->stun_url ? s->stun_url : "stun:stun.cloudflare.com:3478",
 		.turn_url = s->turn_url,
 		.turn_username = s->turn_user,
 		.turn_credential = s->turn_pass,
@@ -346,7 +339,7 @@ static void create_session(struct tether_sender *s, const tether_peer_t *peer)
 	// we have a single receiver; for multi-receiver fanout each session
 	// owns its own. We track them in sessions[].audio (added in a future
 	// refactor). For now release the global one if it was a placeholder.
-	(void)as;  // ownership tracked on the session in production
+	(void)as; // ownership tracked on the session in production
 	pthread_mutex_unlock(&s->lock);
 
 	tether_log_info("sender: created session for peer=%s", peer->peer_id);
@@ -369,8 +362,7 @@ static void on_admission_changed(void *user, const tether_peer_t *peer)
 	}
 }
 
-static void on_signaling_event(void *user, tether_signaling_event_t evt,
-			       const tether_signaling_msg_t *msg)
+static void on_signaling_event(void *user, tether_signaling_event_t evt, const tether_signaling_msg_t *msg)
 {
 	struct tether_sender *s = user;
 	switch (evt) {
@@ -417,8 +409,7 @@ static void on_signaling_event(void *user, tether_signaling_event_t evt,
 				if (end) {
 					size_t len = (size_t)(end - p);
 					char *sdp = dup_span(p, len);
-					tether_webrtc_apply_remote_sdp(r->wrtc,
-								       "answer", sdp);
+					tether_webrtc_apply_remote_sdp(r->wrtc, "answer", sdp);
 					bfree(sdp);
 				}
 			}
@@ -443,8 +434,7 @@ static void on_signaling_event(void *user, tether_signaling_event_t evt,
 				if (ce && me) {
 					char *cand = dup_span(c, (size_t)(ce - c));
 					char *mid = dup_span(m, (size_t)(me - m));
-					tether_webrtc_add_remote_ice(r->wrtc, cand,
-								     mid);
+					tether_webrtc_add_remote_ice(r->wrtc, cand, mid);
 					bfree(cand);
 					bfree(mid);
 				}
@@ -477,22 +467,34 @@ static void session_local_sdp(void *user, const char *type, const char *sdp)
 
 static void session_local_ice(void *user, const char *cand, const char *mid, int mline)
 {
-	(void)user; (void)cand; (void)mid; (void)mline;
+	(void)user;
+	(void)cand;
+	(void)mid;
+	(void)mline;
 }
 
 static void session_state(void *user, tether_webrtc_state_t state)
 {
-	(void)user; (void)state;
+	(void)user;
+	(void)state;
 }
 
 static void session_video(void *u, const uint8_t *d, size_t n, int64_t p, int t)
 {
-	(void)u; (void)d; (void)n; (void)p; (void)t;  // sender-side only outbound
+	(void)u;
+	(void)d;
+	(void)n;
+	(void)p;
+	(void)t; // sender-side only outbound
 }
 
 static void session_audio(void *u, const uint8_t *d, size_t n, int64_t p, int t)
 {
-	(void)u; (void)d; (void)n; (void)p; (void)t;
+	(void)u;
+	(void)d;
+	(void)n;
+	(void)p;
+	(void)t;
 }
 
 // --- registration ---

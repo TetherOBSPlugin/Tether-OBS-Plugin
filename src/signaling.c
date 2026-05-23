@@ -48,14 +48,13 @@ struct tether_signaling {
 	char *display_name;
 	char *token;
 
-	int ws;  // libdatachannel websocket handle, -1 if unset
+	int ws; // libdatachannel websocket handle, -1 if unset
 	atomic_int state;
 
 	pthread_mutex_t lock;
 };
 
-static void emit(tether_signaling_t *sig, tether_signaling_event_t evt,
-		 const char *peer_id, const char *payload)
+static void emit(tether_signaling_t *sig, tether_signaling_event_t evt, const char *peer_id, const char *payload)
 {
 	if (!sig->cfg.cb) {
 		return;
@@ -186,8 +185,7 @@ static void handle_message(tether_signaling_t *sig, const char *json)
 	if (json_eq_str(json, "type", "sdp")) {
 		bool offer = json_eq_str(json, "sdp_type", "offer");
 		char *peer = json_dup_str(json, "peer_id");
-		emit(sig, offer ? TETHER_SIG_EVT_SDP_OFFER : TETHER_SIG_EVT_SDP_ANSWER,
-		     peer, json);
+		emit(sig, offer ? TETHER_SIG_EVT_SDP_OFFER : TETHER_SIG_EVT_SDP_ANSWER, peer, json);
 		bfree(peer);
 		return;
 	}
@@ -217,8 +215,7 @@ static void RTC_API on_open(int id, void *user)
 		    sig->display_name ? sig->display_name : "",
 		    sig->cfg.role == TETHER_ROLE_RECEIVER ? ",\"token\":\"" : "",
 		    sig->cfg.role == TETHER_ROLE_RECEIVER && sig->cfg.token ? sig->cfg.token : "",
-		    sig->cfg.role == TETHER_ROLE_RECEIVER ? "\"" : "",
-		    sig->cfg.token_ttl_minutes,
+		    sig->cfg.role == TETHER_ROLE_RECEIVER ? "\"" : "", sig->cfg.token_ttl_minutes,
 		    sig->cfg.reusable_token ? "true" : "false");
 	send_raw(sig, buf.array);
 	dstr_free(&buf);
@@ -299,8 +296,7 @@ bool tether_signaling_connect(tether_signaling_t *sig)
 	};
 	int ws = rtcCreateWebSocketEx(sig->server_url, &cfg);
 	if (ws <= 0) {
-		tether_log_error("signaling: create failed url=%s rc=%d",
-				 sig->server_url, ws);
+		tether_log_error("signaling: create failed url=%s rc=%d", sig->server_url, ws);
 		set_state(sig, TETHER_SIG_STATE_FAILED);
 		return false;
 	}
@@ -365,8 +361,7 @@ bool tether_signaling_revoke_token(tether_signaling_t *sig)
 	return true;
 }
 
-bool tether_signaling_send_sdp(tether_signaling_t *sig, const char *peer_id,
-			       const char *sdp_type, const char *sdp)
+bool tether_signaling_send_sdp(tether_signaling_t *sig, const char *peer_id, const char *sdp_type, const char *sdp)
 {
 	if (!sig || !peer_id || !sdp_type || !sdp) {
 		return false;
@@ -376,27 +371,38 @@ bool tether_signaling_send_sdp(tether_signaling_t *sig, const char *peer_id,
 	dstr_init(&esc);
 	for (const char *p = sdp; *p; ++p) {
 		switch (*p) {
-		case '\\': dstr_cat(&esc, "\\\\"); break;
-		case '"':  dstr_cat(&esc, "\\\""); break;
-		case '\n': dstr_cat(&esc, "\\n");  break;
-		case '\r': dstr_cat(&esc, "\\r");  break;
-		case '\t': dstr_cat(&esc, "\\t");  break;
-		default:   dstr_ncat(&esc, p, 1);  break;
+		case '\\':
+			dstr_cat(&esc, "\\\\");
+			break;
+		case '"':
+			dstr_cat(&esc, "\\\"");
+			break;
+		case '\n':
+			dstr_cat(&esc, "\\n");
+			break;
+		case '\r':
+			dstr_cat(&esc, "\\r");
+			break;
+		case '\t':
+			dstr_cat(&esc, "\\t");
+			break;
+		default:
+			dstr_ncat(&esc, p, 1);
+			break;
 		}
 	}
 	struct dstr buf;
 	dstr_init(&buf);
-	dstr_printf(&buf,
-		    "{\"type\":\"sdp\",\"peer_id\":\"%s\",\"sdp_type\":\"%s\",\"sdp\":\"%s\"}",
-		    peer_id, sdp_type, esc.array ? esc.array : "");
+	dstr_printf(&buf, "{\"type\":\"sdp\",\"peer_id\":\"%s\",\"sdp_type\":\"%s\",\"sdp\":\"%s\"}", peer_id, sdp_type,
+		    esc.array ? esc.array : "");
 	send_raw(sig, buf.array);
 	dstr_free(&buf);
 	dstr_free(&esc);
 	return true;
 }
 
-bool tether_signaling_send_ice(tether_signaling_t *sig, const char *peer_id,
-			       const char *candidate, const char *mid, int mline_index)
+bool tether_signaling_send_ice(tether_signaling_t *sig, const char *peer_id, const char *candidate, const char *mid,
+			       int mline_index)
 {
 	if (!sig || !peer_id || !candidate || !mid) {
 		return false;
@@ -411,4 +417,3 @@ bool tether_signaling_send_ice(tether_signaling_t *sig, const char *peer_id,
 	dstr_free(&buf);
 	return true;
 }
-

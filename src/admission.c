@@ -56,8 +56,7 @@ static void prune_attempts_locked(tether_admission_t *adm)
 	if (adm->cfg.rate_limit_window_seconds <= 0) {
 		return;
 	}
-	uint64_t cutoff = now_ns() -
-			  (uint64_t)adm->cfg.rate_limit_window_seconds * 1000000000ULL;
+	uint64_t cutoff = now_ns() - (uint64_t)adm->cfg.rate_limit_window_seconds * 1000000000ULL;
 	size_t keep_from = 0;
 	for (; keep_from < adm->attempts.num; ++keep_from) {
 		if (adm->attempts.array[keep_from] >= cutoff) {
@@ -78,12 +77,9 @@ static bool rate_limit_blocks_locked(tether_admission_t *adm)
 		return true;
 	}
 	prune_attempts_locked(adm);
-	if (adm->cfg.rate_limit_max_attempts > 0 &&
-	    (int)adm->attempts.num >= adm->cfg.rate_limit_max_attempts) {
-		adm->lockout_until_ns =
-			now + (uint64_t)adm->cfg.lockout_seconds * 1000000000ULL;
-		tether_log_warning("admission: rate limit hit, locking out for %ds",
-				   adm->cfg.lockout_seconds);
+	if (adm->cfg.rate_limit_max_attempts > 0 && (int)adm->attempts.num >= adm->cfg.rate_limit_max_attempts) {
+		adm->lockout_until_ns = now + (uint64_t)adm->cfg.lockout_seconds * 1000000000ULL;
+		tether_log_warning("admission: rate limit hit, locking out for %ds", adm->cfg.lockout_seconds);
 		return true;
 	}
 	return false;
@@ -120,8 +116,8 @@ void tether_admission_release(tether_admission_t *adm)
 	bfree(adm);
 }
 
-bool tether_admission_add_pending(tether_admission_t *adm, const char *peer_id,
-				  const char *display_name, const char *fingerprint)
+bool tether_admission_add_pending(tether_admission_t *adm, const char *peer_id, const char *display_name,
+				  const char *fingerprint)
 {
 	if (!adm || !peer_id) {
 		return false;
@@ -140,8 +136,7 @@ bool tether_admission_add_pending(tether_admission_t *adm, const char *peer_id,
 	}
 	if (count_locked(adm, TETHER_PEER_ACCEPTED) >= adm->cfg.max_receivers) {
 		pthread_mutex_unlock(&adm->lock);
-		tether_log_info("admission: cap reached (%d), rejecting %s",
-				adm->cfg.max_receivers, peer_id);
+		tether_log_info("admission: cap reached (%d), rejecting %s", adm->cfg.max_receivers, peer_id);
 		return false;
 	}
 
@@ -178,8 +173,7 @@ bool tether_admission_add_pending(tether_admission_t *adm, const char *peer_id,
 	return true;
 }
 
-static bool set_peer_state(tether_admission_t *adm, const char *peer_id,
-			   tether_peer_state_t new_state, bool pin)
+static bool set_peer_state(tether_admission_t *adm, const char *peer_id, tether_peer_state_t new_state, bool pin)
 {
 	if (!adm || !peer_id) {
 		return false;
@@ -230,8 +224,7 @@ void tether_admission_revoke_all(tether_admission_t *adm)
 	pthread_mutex_unlock(&adm->lock);
 }
 
-void tether_admission_iter(tether_admission_t *adm, tether_admission_iter_cb_t cb,
-			   void *user)
+void tether_admission_iter(tether_admission_t *adm, tether_admission_iter_cb_t cb, void *user)
 {
 	if (!adm || !cb) {
 		return;
@@ -279,15 +272,12 @@ int tether_admission_lockout_remaining(tether_admission_t *adm)
 	}
 	pthread_mutex_lock(&adm->lock);
 	uint64_t now = now_ns();
-	int remain = adm->lockout_until_ns > now
-			     ? (int)((adm->lockout_until_ns - now) / 1000000000ULL)
-			     : 0;
+	int remain = adm->lockout_until_ns > now ? (int)((adm->lockout_until_ns - now) / 1000000000ULL) : 0;
 	pthread_mutex_unlock(&adm->lock);
 	return remain;
 }
 
-bool tether_admission_verify_pinned(tether_admission_t *adm, const char *peer_id,
-				    const char *fingerprint)
+bool tether_admission_verify_pinned(tether_admission_t *adm, const char *peer_id, const char *fingerprint)
 {
 	if (!adm || !peer_id || !fingerprint) {
 		return false;

@@ -60,8 +60,7 @@ static const char *get_name(void *unused)
 }
 
 // --- forward decl
-static void signaling_event(void *user, tether_signaling_event_t evt,
-			    const tether_signaling_msg_t *msg);
+static void signaling_event(void *user, tether_signaling_event_t evt, const tether_signaling_msg_t *msg);
 static void wrtc_local_sdp(void *user, const char *type, const char *sdp);
 static void wrtc_local_ice(void *user, const char *cand, const char *mid, int mline);
 static void wrtc_state(void *user, tether_webrtc_state_t s);
@@ -89,11 +88,11 @@ static void apply_settings(struct tether_source *s, obs_data_t *settings)
 	bfree(s->turn_pass);
 	bfree(s->token);
 	s->server_url = bstrdup(obs_data_get_string(settings, "server_url"));
-	s->stun_url   = bstrdup(obs_data_get_string(settings, "stun_url"));
-	s->turn_url   = bstrdup(obs_data_get_string(settings, "turn_url"));
-	s->turn_user  = bstrdup(obs_data_get_string(settings, "turn_user"));
-	s->turn_pass  = bstrdup(obs_data_get_string(settings, "turn_pass"));
-	s->token      = bstrdup(obs_data_get_string(settings, "token"));
+	s->stun_url = bstrdup(obs_data_get_string(settings, "stun_url"));
+	s->turn_url = bstrdup(obs_data_get_string(settings, "turn_url"));
+	s->turn_user = bstrdup(obs_data_get_string(settings, "turn_user"));
+	s->turn_pass = bstrdup(obs_data_get_string(settings, "turn_pass"));
+	s->token = bstrdup(obs_data_get_string(settings, "token"));
 	s->video_codec_id = (int)obs_data_get_int(settings, "video_codec");
 }
 
@@ -109,8 +108,7 @@ static void start_connection(struct tether_source *s)
 	}
 
 	tether_webrtc_config_t wcfg = {
-		.stun_url = s->stun_url && *s->stun_url ? s->stun_url
-							: "stun:stun.cloudflare.com:3478",
+		.stun_url = s->stun_url && *s->stun_url ? s->stun_url : "stun:stun.cloudflare.com:3478",
 		.turn_url = s->turn_url,
 		.turn_username = s->turn_user,
 		.turn_credential = s->turn_pass,
@@ -129,9 +127,7 @@ static void start_connection(struct tether_source *s)
 	}
 
 	tether_signaling_config_t scfg = {
-		.server_url = s->server_url && *s->server_url
-				      ? s->server_url
-				      : tether_default_server_url(),
+		.server_url = s->server_url && *s->server_url ? s->server_url : tether_default_server_url(),
 		.role = TETHER_ROLE_RECEIVER,
 		.display_name = obs_source_get_name(s->source),
 		.token = canon,
@@ -194,8 +190,7 @@ static void update(void *data, obs_data_t *settings)
 static void defaults(obs_data_t *settings)
 {
 	obs_data_set_default_string(settings, "server_url", "");
-	obs_data_set_default_string(settings, "stun_url",
-				    "stun:stun.cloudflare.com:3478");
+	obs_data_set_default_string(settings, "stun_url", "stun:stun.cloudflare.com:3478");
 	obs_data_set_default_int(settings, "video_codec", (int)TETHER_CODEC_H264);
 }
 
@@ -207,8 +202,7 @@ static obs_properties_t *get_properties(void *data)
 
 // --- callbacks ---
 
-static void signaling_event(void *user, tether_signaling_event_t evt,
-			    const tether_signaling_msg_t *msg)
+static void signaling_event(void *user, tether_signaling_event_t evt, const tether_signaling_msg_t *msg)
 {
 	struct tether_source *s = user;
 	switch (evt) {
@@ -218,12 +212,10 @@ static void signaling_event(void *user, tether_signaling_event_t evt,
 		// sender's SDP offer to arrive next.
 		break;
 	case TETHER_SIG_EVT_TOKEN_INVALID:
-		tether_log_warning("source: %s",
-				   obs_module_text("Error.Token.Invalid"));
+		tether_log_warning("source: %s", obs_module_text("Error.Token.Invalid"));
 		break;
 	case TETHER_SIG_EVT_TOKEN_LOCKED_OUT:
-		tether_log_warning("source: %s",
-				   obs_module_text("Error.Token.LockedOut"));
+		tether_log_warning("source: %s", obs_module_text("Error.Token.LockedOut"));
 		break;
 	case TETHER_SIG_EVT_SDP_OFFER: {
 		// Parse sdp out of msg->json_payload (handled by signaling.c
@@ -257,10 +249,18 @@ static void signaling_event(void *user, tether_signaling_event_t evt,
 			if (p[i] == '\\' && i + 1 < len) {
 				char e = p[i + 1];
 				switch (e) {
-				case 'n': sdp[j++] = '\n'; break;
-				case 'r': sdp[j++] = '\r'; break;
-				case 't': sdp[j++] = '\t'; break;
-				default:  sdp[j++] = e;    break;
+				case 'n':
+					sdp[j++] = '\n';
+					break;
+				case 'r':
+					sdp[j++] = '\r';
+					break;
+				case 't':
+					sdp[j++] = '\t';
+					break;
+				default:
+					sdp[j++] = e;
+					break;
 				}
 				++i;
 			} else {
@@ -359,8 +359,7 @@ static void wrtc_audio(void *user, const uint8_t *data, size_t size, int64_t pts
 static struct obs_source_info source_info = {
 	.id = TETHER_SOURCE_ID,
 	.type = OBS_SOURCE_TYPE_INPUT,
-	.output_flags = OBS_SOURCE_ASYNC_VIDEO | OBS_SOURCE_AUDIO |
-			OBS_SOURCE_DO_NOT_DUPLICATE,
+	.output_flags = OBS_SOURCE_ASYNC_VIDEO | OBS_SOURCE_AUDIO | OBS_SOURCE_DO_NOT_DUPLICATE,
 	.get_name = get_name,
 	.create = create,
 	.destroy = destroy,

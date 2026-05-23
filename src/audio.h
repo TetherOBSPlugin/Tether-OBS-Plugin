@@ -25,24 +25,23 @@
 
 #define TETHER_AUDIO_MAX_TRACKS 6
 
-typedef struct tether_audio_sender   tether_audio_sender_t;
+typedef struct tether_audio_sender tether_audio_sender_t;
 typedef struct tether_audio_receiver tether_audio_receiver_t;
 
 // ------------------- sender -------------------
 
 typedef struct {
-	tether_webrtc_t *webrtc;  // borrowed
-	int sample_rate;          // 48000 recommended for Opus
-	int channels;             // 1 (mono) or 2 (stereo) per track
-	int bitrate_kbps;         // per track
+	tether_webrtc_t *webrtc; // borrowed
+	int sample_rate;         // 48000 recommended for Opus
+	int channels;            // 1 (mono) or 2 (stereo) per track
+	int bitrate_kbps;        // per track
 } tether_audio_sender_config_t;
 
 tether_audio_sender_t *tether_audio_sender_create(const tether_audio_sender_config_t *cfg);
 void tether_audio_sender_release(tether_audio_sender_t *s);
 
 // Attach an OBS audio source by name. Returns the WebRTC track id on success.
-int tether_audio_sender_attach(tether_audio_sender_t *s, const char *obs_source_name,
-			       const char *label);
+int tether_audio_sender_attach(tether_audio_sender_t *s, const char *obs_source_name, const char *label);
 
 void tether_audio_sender_detach(tether_audio_sender_t *s, int track_id);
 
@@ -53,14 +52,13 @@ typedef struct {
 	int channels;
 } tether_audio_receiver_config_t;
 
-tether_audio_receiver_t *tether_audio_receiver_create(
-	const tether_audio_receiver_config_t *cfg);
+tether_audio_receiver_t *tether_audio_receiver_create(const tether_audio_receiver_config_t *cfg);
 void tether_audio_receiver_release(tether_audio_receiver_t *r);
 
 // Called by webrtc when a track delivers a packet. The receiver decodes and
 // hands PCM frames to the OBS source's audio output via obs_source_output_audio.
-void tether_audio_receiver_push_packet(tether_audio_receiver_t *r, int track_id,
-				       const uint8_t *data, size_t size, int64_t pts);
+void tether_audio_receiver_push_packet(tether_audio_receiver_t *r, int track_id, const uint8_t *data, size_t size,
+				       int64_t pts);
 
 // Bind the receiver to an obs_source — its decoded PCM will be sent out via
 // obs_source_output_audio on this source.

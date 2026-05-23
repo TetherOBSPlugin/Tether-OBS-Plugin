@@ -58,8 +58,8 @@ void tether_admission_release(tether_admission_t *adm);
 // Returns true if the peer was added as pending. Returns false (and ignores
 // the call) if the rate limit is hit, the max-receivers cap is reached, or
 // the peer is already present.
-bool tether_admission_add_pending(tether_admission_t *adm, const char *peer_id,
-				  const char *display_name, const char *fingerprint);
+bool tether_admission_add_pending(tether_admission_t *adm, const char *peer_id, const char *display_name,
+				  const char *fingerprint);
 
 bool tether_admission_accept(tether_admission_t *adm, const char *peer_id, bool pin);
 bool tether_admission_reject(tether_admission_t *adm, const char *peer_id);
@@ -70,8 +70,7 @@ void tether_admission_revoke_all(tether_admission_t *adm);
 // safety, copy fields out under the same lock — the implementation does that
 // internally via the iter callback below.
 typedef void (*tether_admission_iter_cb_t)(void *user, const tether_peer_t *peer);
-void tether_admission_iter(tether_admission_t *adm, tether_admission_iter_cb_t cb,
-			   void *user);
+void tether_admission_iter(tether_admission_t *adm, tether_admission_iter_cb_t cb, void *user);
 
 // Snapshot helpers
 int tether_admission_count(tether_admission_t *adm, tether_peer_state_t state);
@@ -81,5 +80,4 @@ int tether_admission_lockout_remaining(tether_admission_t *adm);
 // Verifies that a peer that is reconnecting silently presents the same DTLS
 // fingerprint that was pinned at accept time. Returns true if the connection
 // should be re-admitted without user prompt.
-bool tether_admission_verify_pinned(tether_admission_t *adm, const char *peer_id,
-				    const char *fingerprint);
+bool tether_admission_verify_pinned(tether_admission_t *adm, const char *peer_id, const char *fingerprint);

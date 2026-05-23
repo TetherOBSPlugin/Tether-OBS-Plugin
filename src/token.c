@@ -26,7 +26,7 @@
 // 32 visually distinct uppercase letters + digits.
 // Excluded: 0 O, 1 I L. 5 bits per char × 12 chars = 60 bits of entropy.
 static const char k_alphabet[] = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-static const size_t k_alphabet_len = sizeof(k_alphabet) - 1;  // = 31; rounded up below
+static const size_t k_alphabet_len = sizeof(k_alphabet) - 1; // = 31; rounded up below
 
 // We pad to 32 so the modulo bias on a 5-bit draw is exactly zero;
 // duplicating one entry is harmless. K is duplicated.
@@ -38,8 +38,7 @@ static bool fill_random(uint8_t *buf, size_t n)
 	// uses its native API directly. All three are guaranteed available on
 	// the OBS-supported OS baselines.
 #if defined(_WIN32)
-	NTSTATUS s = BCryptGenRandom(NULL, buf, (ULONG)n,
-				     BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+	NTSTATUS s = BCryptGenRandom(NULL, buf, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
 	return s == 0;
 #else
 	int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
@@ -78,7 +77,7 @@ bool tether_token_generate(char *out, size_t out_size)
 
 	for (int g = 0; g < TETHER_TOKEN_GROUPS; ++g) {
 		for (int i = 0; i < TETHER_TOKEN_GROUP_LEN; ++i) {
-			uint8_t idx = bytes[g * TETHER_TOKEN_GROUP_LEN + i] & 0x1F;  // 32 entries
+			uint8_t idx = bytes[g * TETHER_TOKEN_GROUP_LEN + i] & 0x1F; // 32 entries
 			out[pos++] = k_alphabet_padded[idx];
 		}
 		if (g + 1 < TETHER_TOKEN_GROUPS) {
@@ -142,9 +141,9 @@ bool tether_token_normalise(const char *in, char *out, size_t out_size)
 		// to the canonical form. The backend rejects ambiguous tokens
 		// already, but doing it here lets the user paste sloppily.
 		if (c == 'O') {
-			c = '0';  // will be rejected by alphabet check below
+			c = '0'; // will be rejected by alphabet check below
 		} else if (c == 'I' || c == 'L') {
-			c = '1';  // ditto
+			c = '1'; // ditto
 		}
 		out[j++] = c;
 	}

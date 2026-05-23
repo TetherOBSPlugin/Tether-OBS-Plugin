@@ -23,14 +23,14 @@ typedef struct OpusDecoder OpusDecoder;
 
 extern OpusEncoder *opus_encoder_create(int Fs, int channels, int application, int *error);
 extern void opus_encoder_destroy(OpusEncoder *st);
-extern int  opus_encode_float(OpusEncoder *st, const float *pcm, int frame_size,
-			      unsigned char *data, int max_data_bytes);
-extern int  opus_encoder_ctl(OpusEncoder *st, int request, ...);
+extern int opus_encode_float(OpusEncoder *st, const float *pcm, int frame_size, unsigned char *data,
+			     int max_data_bytes);
+extern int opus_encoder_ctl(OpusEncoder *st, int request, ...);
 
 extern OpusDecoder *opus_decoder_create(int Fs, int channels, int *error);
 extern void opus_decoder_destroy(OpusDecoder *st);
-extern int  opus_decode_float(OpusDecoder *st, const unsigned char *data, int len,
-			      float *pcm, int frame_size, int decode_fec);
+extern int opus_decode_float(OpusDecoder *st, const unsigned char *data, int len, float *pcm, int frame_size,
+			     int decode_fec);
 
 #define OPUS_APPLICATION_AUDIO    2049
 #define OPUS_SET_BITRATE_REQUEST  4002
@@ -42,7 +42,7 @@ extern int  opus_decode_float(OpusDecoder *st, const unsigned char *data, int le
 struct sender_track {
 	int track_id;
 	char obs_source_name[256];
-	obs_source_t *source;  // strong ref
+	obs_source_t *source; // strong ref
 	OpusEncoder *enc;
 	int channels;
 	int sample_rate;
@@ -53,7 +53,7 @@ struct sender_track {
 	size_t buf_fill;
 
 	pthread_mutex_t lock;
-	tether_audio_sender_t *owner;  // back-ref for callback access
+	tether_audio_sender_t *owner; // back-ref for callback access
 };
 
 struct tether_audio_sender {
@@ -64,8 +64,7 @@ struct tether_audio_sender {
 
 static void encode_and_send(struct sender_track *t)
 {
-	const size_t frame_samples =
-		(size_t)t->sample_rate * OPUS_FRAME_SIZE_MS / 1000;
+	const size_t frame_samples = (size_t)t->sample_rate * OPUS_FRAME_SIZE_MS / 1000;
 	const size_t needed = frame_samples * (size_t)t->channels;
 	if (t->buf_fill < needed) {
 		return;
@@ -74,8 +73,7 @@ static void encode_and_send(struct sender_track *t)
 	uint8_t out[1500];
 	int n = opus_encode_float(t->enc, t->buf, (int)frame_samples, out, sizeof(out));
 	if (n > 0) {
-		tether_webrtc_push_audio(t->owner->cfg.webrtc, t->track_id, out,
-					 (size_t)n, 0);
+		tether_webrtc_push_audio(t->owner->cfg.webrtc, t->track_id, out, (size_t)n, 0);
 	}
 
 	// Drop the consumed samples from the head of the buffer.
@@ -83,8 +81,7 @@ static void encode_and_send(struct sender_track *t)
 	t->buf_fill -= needed;
 }
 
-static void on_audio_capture(void *param, obs_source_t *source,
-			     const struct audio_data *audio_data, bool muted)
+static void on_audio_capture(void *param, obs_source_t *source, const struct audio_data *audio_data, bool muted)
 {
 	(void)source;
 	if (muted || !audio_data) {
@@ -148,8 +145,7 @@ void tether_audio_sender_release(tether_audio_sender_t *s)
 	for (size_t i = 0; i < s->tracks.num; ++i) {
 		struct sender_track *t = s->tracks.array[i];
 		if (t->source) {
-			obs_source_remove_audio_capture_callback(t->source,
-								 on_audio_capture, t);
+			obs_source_remove_audio_capture_callback(t->source, on_audio_capture, t);
 			obs_source_release(t->source);
 		}
 		if (t->enc) {
@@ -164,8 +160,7 @@ void tether_audio_sender_release(tether_audio_sender_t *s)
 	bfree(s);
 }
 
-int tether_audio_sender_attach(tether_audio_sender_t *s, const char *obs_source_name,
-			       const char *label)
+int tether_audio_sender_attach(tether_audio_sender_t *s, const char *obs_source_name, const char *label)
 {
 	if (!s || !obs_source_name) {
 		return -1;
@@ -192,20 +187,17 @@ int tether_audio_sender_attach(tether_audio_sender_t *s, const char *obs_source_
 	pthread_mutex_init(&t->lock, NULL);
 
 	int err = 0;
-	t->enc = opus_encoder_create(t->sample_rate, t->channels,
-				     OPUS_APPLICATION_AUDIO, &err);
+	t->enc = opus_encoder_create(t->sample_rate, t->channels, OPUS_APPLICATION_AUDIO, &err);
 	if (!t->enc || err != 0) {
 		tether_log_error("audio: opus encoder create rc=%d", err);
 		obs_source_release(src);
 		bfree(t);
 		return -1;
 	}
-	opus_encoder_ctl(t->enc, OPUS_SET_BITRATE_REQUEST,
-			 s->cfg.bitrate_kbps * 1000);
+	opus_encoder_ctl(t->enc, OPUS_SET_BITRATE_REQUEST, s->cfg.bitrate_kbps * 1000);
 
 	// Buffer up to 200 ms.
-	t->buf_capacity =
-		(size_t)t->sample_rate * 200 / 1000 * (size_t)t->channels;
+	t->buf_capacity = (size_t)t->sample_rate * 200 / 1000 * (size_t)t->channels;
 	t->buf = bzalloc(t->buf_capacity * sizeof(float));
 
 	obs_source_add_audio_capture_callback(src, on_audio_capture, t);
@@ -214,8 +206,8 @@ int tether_audio_sender_attach(tether_audio_sender_t *s, const char *obs_source_
 	da_push_back(s->tracks, &t);
 	pthread_mutex_unlock(&s->lock);
 
-	tether_log_info("audio: attached '%s' as track %d (%d Hz, %d ch)",
-			obs_source_name, track_id, t->sample_rate, t->channels);
+	tether_log_info("audio: attached '%s' as track %d (%d Hz, %d ch)", obs_source_name, track_id, t->sample_rate,
+			t->channels);
 	return track_id;
 }
 
@@ -234,8 +226,7 @@ void tether_audio_sender_detach(tether_audio_sender_t *s, int track_id)
 		pthread_mutex_unlock(&s->lock);
 
 		if (t->source) {
-			obs_source_remove_audio_capture_callback(t->source,
-								 on_audio_capture, t);
+			obs_source_remove_audio_capture_callback(t->source, on_audio_capture, t);
 			obs_source_release(t->source);
 		}
 		if (t->enc) {
@@ -259,12 +250,11 @@ struct receiver_track {
 struct tether_audio_receiver {
 	tether_audio_receiver_config_t cfg;
 	DARRAY(struct receiver_track *) tracks;
-	obs_source_t *bound_source;  // weak (the source owns us)
+	obs_source_t *bound_source; // weak (the source owns us)
 	pthread_mutex_t lock;
 };
 
-tether_audio_receiver_t *tether_audio_receiver_create(
-	const tether_audio_receiver_config_t *cfg)
+tether_audio_receiver_t *tether_audio_receiver_create(const tether_audio_receiver_config_t *cfg)
 {
 	tether_audio_receiver_t *r = bzalloc(sizeof(*r));
 	r->cfg = *cfg;
@@ -323,8 +313,8 @@ static struct receiver_track *get_or_create_track(tether_audio_receiver_t *r, in
 	return t;
 }
 
-void tether_audio_receiver_push_packet(tether_audio_receiver_t *r, int track_id,
-				       const uint8_t *data, size_t size, int64_t pts)
+void tether_audio_receiver_push_packet(tether_audio_receiver_t *r, int track_id, const uint8_t *data, size_t size,
+				       int64_t pts)
 {
 	(void)pts;
 	if (!r || !data || size == 0 || !r->bound_source) {

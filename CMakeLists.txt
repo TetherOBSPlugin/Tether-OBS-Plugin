@@ -38,19 +38,34 @@ if(ENABLE_QT)
   )
 endif()
 
-# libdatachannel provides the WebRTC transport. Either system-installed (find_package)
-# or vendored as a submodule under deps/libdatachannel — the latter wins if present.
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/deps/libdatachannel/CMakeLists.txt")
+# libdatachannel provides the WebRTC transport. Resolved in this order:
+#   1. System install (find_package) — devs with libdatachannel-devel.
+#   2. Vendored submodule under deps/libdatachannel — pinned local copy.
+#   3. FetchContent from upstream — CI runners without a system package.
+set(_TETHER_LDC_TAG "v0.23.1")
+find_package(LibDataChannel CONFIG QUIET)
+if(NOT LibDataChannel_FOUND)
   set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
   set(NO_EXAMPLES ON CACHE BOOL "" FORCE)
   set(NO_TESTS ON CACHE BOOL "" FORCE)
   set(USE_GNUTLS OFF CACHE BOOL "" FORCE)
-  add_subdirectory(deps/libdatachannel EXCLUDE_FROM_ALL)
-  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE LibDataChannel::LibDataChannel)
-else()
-  find_package(LibDataChannel REQUIRED)
-  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE LibDataChannel::LibDataChannel)
+  set(NO_WEBSOCKET OFF CACHE BOOL "" FORCE)
+  set(NO_MEDIA OFF CACHE BOOL "" FORCE)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/deps/libdatachannel/CMakeLists.txt")
+    add_subdirectory(deps/libdatachannel EXCLUDE_FROM_ALL)
+  else()
+    include(FetchContent)
+    FetchContent_Declare(
+      libdatachannel
+      GIT_REPOSITORY https://github.com/paullouisageneau/libdatachannel.git
+      GIT_TAG ${_TETHER_LDC_TAG}
+      GIT_SHALLOW TRUE
+      GIT_SUBMODULES_RECURSE TRUE
+    )
+    FetchContent_MakeAvailable(libdatachannel)
+  endif()
 endif()
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE LibDataChannel::LibDataChannel)
 
 target_sources(
   ${CMAKE_PROJECT_NAME}

@@ -55,19 +55,18 @@ typedef enum {
 
 typedef struct {
 	const char *peer_id;
-	const char *json_payload;  // event-specific
+	const char *json_payload; // event-specific
 } tether_signaling_msg_t;
 
-typedef void (*tether_signaling_cb_t)(void *user, tether_signaling_event_t evt,
-				      const tether_signaling_msg_t *msg);
+typedef void (*tether_signaling_cb_t)(void *user, tether_signaling_event_t evt, const tether_signaling_msg_t *msg);
 
 typedef struct {
-	const char *server_url;  // wss://...
+	const char *server_url; // wss://...
 	tether_role_t role;
 	const char *display_name;
-	const char *token;        // receiver-only; ignored for sender
-	int token_ttl_minutes;    // sender-only
-	bool reusable_token;      // sender-only
+	const char *token;     // receiver-only; ignored for sender
+	int token_ttl_minutes; // sender-only
+	bool reusable_token;   // sender-only
 	tether_signaling_cb_t cb;
 	void *cb_user;
 } tether_signaling_config_t;
@@ -85,7 +84,6 @@ bool tether_signaling_reject(tether_signaling_t *sig, const char *peer_id);
 bool tether_signaling_revoke_token(tether_signaling_t *sig);
 
 // Outbound SDP/ICE — these are only forwarded once the peer has been accepted.
-bool tether_signaling_send_sdp(tether_signaling_t *sig, const char *peer_id,
-			       const char *sdp_type, const char *sdp);
-bool tether_signaling_send_ice(tether_signaling_t *sig, const char *peer_id,
-			       const char *candidate, const char *mid, int mline_index);
+bool tether_signaling_send_sdp(tether_signaling_t *sig, const char *peer_id, const char *sdp_type, const char *sdp);
+bool tether_signaling_send_ice(tether_signaling_t *sig, const char *peer_id, const char *candidate, const char *mid,
+			       int mline_index);
