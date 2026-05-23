@@ -214,6 +214,23 @@ void tether_webrtc_release(tether_webrtc_t *w)
 	bfree(w);
 }
 
+bool tether_webrtc_negotiate(tether_webrtc_t *w)
+{
+	if (!w) {
+		return false;
+	}
+	// type=NULL lets libdatachannel pick the right operation (offer when no
+	// remote description is set yet, answer when one is). For senders that
+	// added tracks before any signaling, this generates the SDP offer and
+	// fires on_local_description.
+	int rc = rtcSetLocalDescription(w->pc, NULL);
+	if (rc < 0) {
+		tether_log_warning("webrtc: setLocalDescription rc=%d", rc);
+		return false;
+	}
+	return true;
+}
+
 bool tether_webrtc_apply_remote_sdp(tether_webrtc_t *w, const char *sdp_type, const char *sdp)
 {
 	if (!w || !sdp_type || !sdp) {
@@ -223,6 +240,15 @@ bool tether_webrtc_apply_remote_sdp(tether_webrtc_t *w, const char *sdp_type, co
 	if (rc < 0) {
 		tether_log_warning("webrtc: setRemoteDescription rc=%d", rc);
 		return false;
+	}
+	// When the remote sends an offer, we are the answerer. libdatachannel
+	// does not auto-generate the answer for media tracks — kick it off.
+	if (strcmp(sdp_type, "offer") == 0) {
+		int rc2 = rtcSetLocalDescription(w->pc, NULL);
+		if (rc2 < 0) {
+			tether_log_warning("webrtc: answerer setLocalDescription rc=%d", rc2);
+			return false;
+		}
 	}
 	return true;
 }

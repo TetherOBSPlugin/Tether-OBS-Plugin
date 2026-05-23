@@ -101,10 +101,13 @@ export class Room {
     const tokenParam = url.searchParams.get('token');
     // The edge in index.ts has already minted the token for fresh senders and
     // routed both sender + receiver to this DO under the same name. Adopt that
-    // name as our token on first sender hello — overrides any stale storage.
+    // name as our token whenever we see it — the DO name IS the token, so the
+    // header is authoritative. Persist immediately so a later cold-load can
+    // skip the "first sender hello" path entirely.
     const roomHint = request.headers.get('X-Tether-Room');
-    if (roomHint && !this.token) {
+    if (roomHint && this.token !== roomHint) {
       this.token = roomHint;
+      await this.state.storage.put('token', roomHint);
     }
 
     server.addEventListener('message', (event) => {

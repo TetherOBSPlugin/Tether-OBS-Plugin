@@ -49,6 +49,8 @@ private:
 	void onRevokeToken();
 	void onAcceptPeer();
 	void onRejectPeer();
+	void onDisconnectPeer();
+	void refreshStatusLabel();
 
 	// Static callback trampolines — these may fire on any thread; they
 	// marshal to the GUI thread via QMetaObject::invokeMethod with a
@@ -74,6 +76,7 @@ private:
 	QListWidget *peersList_ = nullptr;
 	QPushButton *acceptBtn_ = nullptr;
 	QPushButton *rejectBtn_ = nullptr;
+	QPushButton *disconnectBtn_ = nullptr;
 	QLabel *statusLabel_ = nullptr;
 
 	tether_sender_t *sender_ = nullptr;
@@ -147,25 +150,32 @@ SenderDialog::SenderDialog() : QDialog(nullptr)
 	auto *peerRow = new QHBoxLayout();
 	acceptBtn_ = new QPushButton(fromTr("Admission.Request.Accept"), this);
 	rejectBtn_ = new QPushButton(fromTr("Admission.Request.Reject"), this);
+	disconnectBtn_ = new QPushButton(fromTr("Admission.Receiver.Disconnect"), this);
 	acceptBtn_->setEnabled(false);
 	rejectBtn_->setEnabled(false);
+	disconnectBtn_->setEnabled(false);
 	peerRow->addWidget(acceptBtn_);
 	peerRow->addWidget(rejectBtn_);
+	peerRow->addWidget(disconnectBtn_);
 	root->addLayout(peerRow);
 
 	connect(generateBtn_, &QPushButton::clicked, this, &SenderDialog::onGenerateToken);
 	connect(revokeBtn_, &QPushButton::clicked, this, &SenderDialog::onRevokeToken);
 	connect(acceptBtn_, &QPushButton::clicked, this, &SenderDialog::onAcceptPeer);
 	connect(rejectBtn_, &QPushButton::clicked, this, &SenderDialog::onRejectPeer);
+	connect(disconnectBtn_, &QPushButton::clicked, this, &SenderDialog::onDisconnectPeer);
 	connect(copyBtn_, &QPushButton::clicked, this, [this] {
 		QGuiApplication::clipboard()->setText(tokenField_->text());
 		copyBtn_->setText(fromTr("Token.Copied"));
 		QTimer::singleShot(1500, this, [this] { copyBtn_->setText(fromTr("Token.Copy")); });
 	});
 	connect(peersList_, &QListWidget::currentRowChanged, this, [this](int row) {
-		const bool ok = row >= 0;
-		acceptBtn_->setEnabled(ok);
-		rejectBtn_->setEnabled(ok);
+		QListWidgetItem *it = (row >= 0) ? peersList_->item(row) : nullptr;
+		const bool isConnected = it && it->data(Qt::UserRole + 1).toInt() == TETHER_SENDER_STATE_PEER_CONNECTED;
+		const bool isPending = it && !isConnected;
+		acceptBtn_->setEnabled(isPending);
+		rejectBtn_->setEnabled(isPending);
+		disconnectBtn_->setEnabled(isConnected);
 	});
 
 	// All widgets exist now — safe to populate the source / audio lists.
@@ -316,6 +326,39 @@ void SenderDialog::onRejectPeer()
 	tether_sender_reject(sender_, it->data(Qt::UserRole).toString().toUtf8().constData());
 }
 
+void SenderDialog::onDisconnectPeer()
+{
+	QListWidgetItem *it = peersList_->currentItem();
+	if (!it || !sender_) {
+		return;
+	}
+	tether_sender_disconnect_peer(sender_, it->data(Qt::UserRole).toString().toUtf8().constData());
+}
+
+void SenderDialog::refreshStatusLabel()
+{
+	int pending = 0;
+	int connected = 0;
+	for (int i = 0; i < peersList_->count(); ++i) {
+		QListWidgetItem *it = peersList_->item(i);
+		const int state = it->data(Qt::UserRole + 1).toInt();
+		if (state == TETHER_SENDER_STATE_PEER_CONNECTED) {
+			++connected;
+		} else {
+			++pending;
+		}
+	}
+	if (connected > 0 && pending > 0) {
+		statusLabel_->setText(fromTr("Admission.Status.Mixed").arg(connected).arg(pending));
+	} else if (connected > 0) {
+		statusLabel_->setText(fromTr("Admission.Status.Connected").arg(connected));
+	} else if (pending > 0) {
+		statusLabel_->setText(fromTr("Admission.Status.Pending").arg(pending));
+	} else if (sender_ && tether_sender_current_token(sender_)) {
+		statusLabel_->setText(fromTr("Admission.Status.Idle"));
+	}
+}
+
 // ---- static trampolines marshaling to the Qt thread ---
 
 void SenderDialog::onTokenStatic(void *user, const char *token)
@@ -373,7 +416,8 @@ void SenderDialog::postPendingPeer(const QString &peer_id, const QString &name, 
 	auto *item =
 		new QListWidgetItem(QStringLiteral("%1  (%2)").arg(name.isEmpty() ? peer_id : name, fp), peersList_);
 	item->setData(Qt::UserRole, peer_id);
-	statusLabel_->setText(fromTr("Admission.Status.Pending").arg(1));
+	item->setData(Qt::UserRole + 1, static_cast<int>(TETHER_SENDER_STATE_WAITING));
+	refreshStatusLabel();
 }
 
 void SenderDialog::postPeerState(const QString &peer_id, tether_sender_state_t state)
@@ -388,8 +432,17 @@ void SenderDialog::postPeerState(const QString &peer_id, tether_sender_state_t s
 				suffix = QStringLiteral(" — failed");
 			}
 			it->setText(QStringLiteral("%1%2").arg(it->text().split(" — ").first(), suffix));
+			it->setData(Qt::UserRole + 1, static_cast<int>(state));
 			break;
 		}
+	}
+	refreshStatusLabel();
+	// Update button enablement for the current selection.
+	if (QListWidgetItem *cur = peersList_->currentItem()) {
+		const bool isConnected = cur->data(Qt::UserRole + 1).toInt() == TETHER_SENDER_STATE_PEER_CONNECTED;
+		acceptBtn_->setEnabled(!isConnected);
+		rejectBtn_->setEnabled(!isConnected);
+		disconnectBtn_->setEnabled(isConnected);
 	}
 }
 
@@ -402,6 +455,7 @@ void SenderDialog::postPeerGone(const QString &peer_id)
 			break;
 		}
 	}
+	refreshStatusLabel();
 }
 
 } // namespace

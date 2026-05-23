@@ -75,6 +75,12 @@ bool tether_webrtc_add_remote_ice(tether_webrtc_t *w, const char *candidate, con
 int tether_webrtc_add_video_track(tether_webrtc_t *w);
 int tether_webrtc_add_audio_track(tether_webrtc_t *w, const char *label);
 
+// Initiate (or restart) negotiation. For media tracks libdatachannel's auto-
+// negotiation does not fire on its own — the offerer must call this after
+// adding tracks, and the answerer needs no explicit call (setRemoteDescription
+// triggers the answer generation).
+bool tether_webrtc_negotiate(tether_webrtc_t *w);
+
 // Outbound media (sender side). The payload format is codec-specific — for
 // H.264 we expect Annex-B NAL units; for Opus, an opaque packet.
 bool tether_webrtc_push_video(tether_webrtc_t *w, int track_id, const uint8_t *data, size_t size, int64_t pts);

@@ -71,6 +71,7 @@ void tether_sender_release(tether_sender_t *s);
 // Accept/Reject on a pending row.
 void tether_sender_accept(tether_sender_t *s, const char *peer_id, bool pin);
 void tether_sender_reject(tether_sender_t *s, const char *peer_id);
+void tether_sender_disconnect_peer(tether_sender_t *s, const char *peer_id);
 void tether_sender_revoke_token(tether_sender_t *s);
 
 // Latest issued token (NUL-terminated). Returns NULL until the signaling

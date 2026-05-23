@@ -264,6 +264,13 @@ static void create_session(struct tether_sender *s, const tether_peer_t *peer)
 
 	tether_log_info("sender: created session for peer=%s audio_tracks=%d", peer->peer_id,
 			(int)s->audio_source_names.num);
+
+	// Tracks are added; kick off the offer. libdatachannel only auto-
+	// negotiates the initial Data Channel — media tracks need an explicit
+	// setLocalDescription call from the offerer.
+	if (!tether_webrtc_negotiate(w)) {
+		tether_log_error("sender: failed to start SDP negotiation for peer=%s", peer->peer_id);
+	}
 }
 
 // ---- callbacks from signaling / admission ------------------------------
@@ -685,6 +692,31 @@ void tether_sender_reject(tether_sender_t *s, const char *peer_id)
 {
 	if (s) {
 		tether_admission_reject(s->adm, peer_id);
+	}
+}
+
+void tether_sender_disconnect_peer(tether_sender_t *s, const char *peer_id)
+{
+	if (!s || !peer_id) {
+		return;
+	}
+	// Drop the live media session for this peer; admission_disconnect_peer
+	// also clears the pin so a reconnect lands in the pending list again.
+	pthread_mutex_lock(&s->lock);
+	struct receiver_session *r = find_session_locked(s, peer_id);
+	if (r) {
+		tether_webrtc_release(r->wrtc);
+		r->wrtc = NULL;
+		if (r->audio) {
+			tether_audio_sender_release(r->audio);
+			r->audio = NULL;
+		}
+	}
+	pthread_mutex_unlock(&s->lock);
+	tether_admission_disconnect_peer(s->adm, peer_id);
+	tether_signaling_reject(s->sig, peer_id);
+	if (s->cbs.on_peer_gone) {
+		s->cbs.on_peer_gone(s->cbs.user, peer_id);
 	}
 }
 

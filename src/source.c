@@ -110,8 +110,7 @@ static void apply_settings(struct tether_source *s, obs_data_t *settings)
 
 static void start_connection(struct tether_source *s)
 {
-	tether_log_info("source: start_connection token='%s' server_url='%s'",
-			s->token ? s->token : "(null)",
+	tether_log_info("source: start_connection token='%s' server_url='%s'", s->token ? s->token : "(null)",
 			s->server_url ? s->server_url : "(null)");
 	if (!s->token || !*s->token) {
 		tether_log_info("source: empty token, not connecting yet");
