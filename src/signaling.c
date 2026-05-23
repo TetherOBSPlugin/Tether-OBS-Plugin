@@ -223,7 +223,12 @@ static void RTC_API on_open(int id, void *user)
 	set_state(sig, TETHER_SIG_STATE_CONNECTED);
 	tether_log_info("signaling: connected to %s", sig->server_url);
 
-	// Send hello.
+	// Send hello. Note we read the token from sig->token (bstrdup'd in
+	// tether_signaling_create) — NOT sig->cfg.token: that pointer aliased
+	// the caller's stack-allocated buffer (the `canon[]` in
+	// source.c::start_connection) which is already out of scope by the
+	// time this callback fires asynchronously on a libdatachannel
+	// worker thread.
 	struct dstr buf;
 	dstr_init(&buf);
 	dstr_printf(&buf,
@@ -232,9 +237,10 @@ static void RTC_API on_open(int id, void *user)
 		    sig->cfg.role == TETHER_ROLE_SENDER ? "sender" : "receiver",
 		    sig->display_name ? sig->display_name : "",
 		    sig->cfg.role == TETHER_ROLE_RECEIVER ? ",\"token\":\"" : "",
-		    sig->cfg.role == TETHER_ROLE_RECEIVER && sig->cfg.token ? sig->cfg.token : "",
+		    sig->cfg.role == TETHER_ROLE_RECEIVER && sig->token ? sig->token : "",
 		    sig->cfg.role == TETHER_ROLE_RECEIVER ? "\"" : "", sig->cfg.token_ttl_minutes,
 		    sig->cfg.reusable_token ? "true" : "false");
+	tether_log_info("signaling: sending hello (%d bytes): %.120s", (int)buf.len, buf.array);
 	send_raw(sig, buf.array);
 	dstr_free(&buf);
 }
@@ -281,6 +287,11 @@ tether_signaling_t *tether_signaling_create(const tether_signaling_config_t *cfg
 	sig->cfg = *cfg;
 	sig->server_url = bstrdup(cfg->server_url);
 	sig->display_name = bstrdup(cfg->display_name ? cfg->display_name : "");
+	// Receiver-side: the caller passes the token in cfg->token but that
+	// pointer typically aliases a stack buffer (canon[] in
+	// source.c::start_connection). Copy it into sig->token so the async
+	// on_open callback can still read a valid string.
+	sig->token = (cfg->token && *cfg->token) ? bstrdup(cfg->token) : NULL;
 	sig->ws = -1;
 	sig->state = TETHER_SIG_STATE_DISCONNECTED;
 	pthread_mutex_init(&sig->lock, NULL);

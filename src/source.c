@@ -110,14 +110,19 @@ static void apply_settings(struct tether_source *s, obs_data_t *settings)
 
 static void start_connection(struct tether_source *s)
 {
+	tether_log_info("source: start_connection token='%s' server_url='%s'",
+			s->token ? s->token : "(null)",
+			s->server_url ? s->server_url : "(null)");
 	if (!s->token || !*s->token) {
+		tether_log_info("source: empty token, not connecting yet");
 		return;
 	}
 	char canon[TETHER_TOKEN_BUF];
 	if (!tether_token_normalise(s->token, canon, sizeof(canon))) {
-		tether_log_warning("source: token rejected by normaliser");
+		tether_log_warning("source: token '%s' rejected by normaliser", s->token);
 		return;
 	}
+	tether_log_info("source: token normalised → '%s'", canon);
 
 	tether_webrtc_config_t wcfg = {
 		.stun_url = s->stun_url && *s->stun_url ? s->stun_url : "stun:stun.cloudflare.com:3478",
