@@ -6,7 +6,6 @@
 #include "receive-dialog.hpp"
 
 extern "C" {
-#include <obs-frontend-api.h>
 #include <obs-module.h>
 #include <obs.h>
 }
@@ -14,9 +13,7 @@ extern "C" {
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDialog>
-#include <QHBoxLayout>
 #include <QLabel>
-#include <QLineEdit>
 #include <QListWidget>
 #include <QMetaObject>
 #include <QPointer>
@@ -33,10 +30,7 @@ public:
 
 private:
 	void refreshSessionList();
-	void onConnect();
 
-	QLineEdit *tokenField_ = nullptr;
-	QPushButton *connectBtn_ = nullptr;
 	QListWidget *sessionList_ = nullptr;
 	QPushButton *disconnectBtn_ = nullptr;
 	QLabel *hintLabel_ = nullptr;
@@ -84,19 +78,6 @@ ReceiveDialog::ReceiveDialog() : QDialog(nullptr)
 
 	auto *root = new QVBoxLayout(this);
 
-	auto *tokenLabel = new QLabel(fromTr("Receive.TokenLabel"), this);
-	root->addWidget(tokenLabel);
-
-	auto *tokenRow = new QHBoxLayout();
-	tokenField_ = new QLineEdit(this);
-	tokenField_->setPlaceholderText(fromTr("Receive.TokenPlaceholder"));
-	tokenField_->setStyleSheet(QStringLiteral("font-family: monospace; font-size: 14pt; letter-spacing: 0.1em;"));
-	connectBtn_ = new QPushButton(fromTr("Receive.Connect"), this);
-	tokenRow->addWidget(tokenField_, 1);
-	tokenRow->addWidget(connectBtn_);
-	root->addLayout(tokenRow);
-
-	root->addSpacing(8);
 	auto *sessionsLabel = new QLabel(fromTr("Receive.Sessions"), this);
 	root->addWidget(sessionsLabel);
 	sessionList_ = new QListWidget(this);
@@ -111,7 +92,6 @@ ReceiveDialog::ReceiveDialog() : QDialog(nullptr)
 	hintLabel_->setStyleSheet(QStringLiteral("color: gray;"));
 	root->addWidget(hintLabel_);
 
-	connect(connectBtn_, &QPushButton::clicked, this, &ReceiveDialog::onConnect);
 	connect(sessionList_, &QListWidget::currentRowChanged, this,
 		[this](int row) { disconnectBtn_->setEnabled(row >= 0); });
 	connect(disconnectBtn_, &QPushButton::clicked, this, [this] {
@@ -153,41 +133,6 @@ void ReceiveDialog::refreshSessionList()
 			break;
 		}
 	}
-}
-
-// Create a new Tether-Quelle source on the currently active scene with the
-// pasted token. Lets the user receive purely from the hub dialog, without
-// having to use the OBS Add-Source menu.
-void ReceiveDialog::onConnect()
-{
-	const QString token = tokenField_->text().trimmed();
-	if (token.isEmpty()) {
-		return;
-	}
-
-	obs_source_t *scene = obs_frontend_get_current_scene();
-	if (!scene) {
-		return;
-	}
-
-	obs_data_t *settings = obs_data_create();
-	obs_data_set_string(settings, "token", token.toUtf8().constData());
-
-	// Name the source by token so it's easy to find in the source list.
-	QString name = QStringLiteral("Tether %1").arg(token);
-	obs_source_t *src = obs_source_create("tether_source", name.toUtf8().constData(), settings, nullptr);
-	if (src) {
-		obs_scene_t *s = obs_scene_from_source(scene);
-		if (s) {
-			obs_scene_add(s, src);
-		}
-		obs_source_release(src);
-	}
-	obs_data_release(settings);
-	obs_source_release(scene);
-
-	tokenField_->clear();
-	refreshSessionList();
 }
 
 } // namespace

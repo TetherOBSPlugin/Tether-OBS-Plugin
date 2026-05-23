@@ -97,29 +97,23 @@ SenderDialog::SenderDialog() : QDialog(nullptr)
 
 	auto *root = new QVBoxLayout(this);
 
-	auto *modeLabel = new QLabel(fromTr("Settings.Mode"), this);
-	root->addWidget(modeLabel);
-	modeCombo_ = new QComboBox(this);
-	modeCombo_->addItem(fromTr("Settings.Mode.Standard"), 0);
-	modeCombo_->addItem(fromTr("Settings.Mode.TwitchStreamTogether"), 1);
-	root->addWidget(modeCombo_);
+	// --- Top: token + Generate/Revoke/Copy (the headline action) ---
+	auto *tokenLabel = new QLabel(fromTr("Token.Generated"), this);
+	QFont tokenLabelFont = tokenLabel->font();
+	tokenLabelFont.setBold(true);
+	tokenLabel->setFont(tokenLabelFont);
+	root->addWidget(tokenLabel);
 
-	auto *srcLabel = new QLabel(fromTr("Settings.VideoSource"), this);
-	root->addWidget(srcLabel);
-	sourceCombo_ = new QComboBox(this);
-	root->addWidget(sourceCombo_);
-
-	auto *audioLabel = new QLabel(fromTr("Settings.AudioTracks"), this);
-	root->addWidget(audioLabel);
-	audioList_ = new QListWidget(this);
-	audioList_->setSelectionMode(QAbstractItemView::NoSelection);
-	root->addWidget(audioList_);
-
-	auto *serverLabel = new QLabel(fromTr("Settings.Server.Url"), this);
-	root->addWidget(serverLabel);
-	serverField_ = new QLineEdit(this);
-	serverField_->setPlaceholderText(QStringLiteral("wss://… (leave blank for managed default)"));
-	root->addWidget(serverField_);
+	auto *tokenRow = new QHBoxLayout();
+	tokenField_ = new QLineEdit(this);
+	tokenField_->setReadOnly(true);
+	tokenField_->setStyleSheet(QStringLiteral("font-family: monospace; font-size: 14pt; letter-spacing: 0.1em;"));
+	tokenField_->setPlaceholderText(QStringLiteral("TTHR-XXXX-XXXX-XXXX"));
+	copyBtn_ = new QPushButton(fromTr("Token.Copy"), this);
+	copyBtn_->setEnabled(false);
+	tokenRow->addWidget(tokenField_, 1);
+	tokenRow->addWidget(copyBtn_);
+	root->addLayout(tokenRow);
 
 	auto *btnRow = new QHBoxLayout();
 	generateBtn_ = new QPushButton(fromTr("Token.Generate"), this);
@@ -129,21 +123,38 @@ SenderDialog::SenderDialog() : QDialog(nullptr)
 	btnRow->addWidget(revokeBtn_);
 	root->addLayout(btnRow);
 
-	auto *tokenLabel = new QLabel(fromTr("Token.Generated"), this);
-	root->addWidget(tokenLabel);
-	auto *tokenRow = new QHBoxLayout();
-	tokenField_ = new QLineEdit(this);
-	tokenField_->setReadOnly(true);
-	tokenField_->setStyleSheet(QStringLiteral("font-family: monospace; font-size: 14pt; letter-spacing: 0.1em;"));
-	copyBtn_ = new QPushButton(fromTr("Token.Copy"), this);
-	copyBtn_->setEnabled(false);
-	tokenRow->addWidget(tokenField_, 1);
-	tokenRow->addWidget(copyBtn_);
-	root->addLayout(tokenRow);
-
 	statusLabel_ = new QLabel(fromTr("Admission.Status.Idle"), this);
 	root->addWidget(statusLabel_);
 
+	// --- Middle: what to share (settings) ---
+	auto *settingsHeader = new QLabel(fromTr("Settings.VideoSource"), this);
+	root->addSpacing(8);
+	root->addWidget(settingsHeader);
+	sourceCombo_ = new QComboBox(this);
+	root->addWidget(sourceCombo_);
+
+	auto *audioLabel = new QLabel(fromTr("Settings.AudioTracks"), this);
+	root->addWidget(audioLabel);
+	audioList_ = new QListWidget(this);
+	audioList_->setSelectionMode(QAbstractItemView::NoSelection);
+	audioList_->setMaximumHeight(110);
+	root->addWidget(audioList_);
+
+	auto *modeLabel = new QLabel(fromTr("Settings.Mode"), this);
+	root->addWidget(modeLabel);
+	modeCombo_ = new QComboBox(this);
+	modeCombo_->addItem(fromTr("Settings.Mode.Standard"), 0);
+	modeCombo_->addItem(fromTr("Settings.Mode.TwitchStreamTogether"), 1);
+	root->addWidget(modeCombo_);
+
+	auto *serverLabel = new QLabel(fromTr("Settings.Server.Url"), this);
+	root->addWidget(serverLabel);
+	serverField_ = new QLineEdit(this);
+	serverField_->setPlaceholderText(QStringLiteral("wss://… (leave blank for managed default)"));
+	root->addWidget(serverField_);
+
+	// --- Bottom: peers list + actions ---
+	root->addSpacing(8);
 	peersList_ = new QListWidget(this);
 	root->addWidget(peersList_, 1);
 
