@@ -114,6 +114,7 @@ static void RTC_API on_local_candidate(int pc, const char *candidate, const char
 {
 	(void)pc;
 	tether_webrtc_t *w = user;
+	tether_log_info("webrtc: local ICE candidate mid=%s: %s", mid, candidate);
 	if (w->cfg.on_local_ice) {
 		// mid is the m-line identifier; mline_index can be derived from
 		// it but libdatachannel does not expose it directly. The
@@ -165,7 +166,13 @@ tether_webrtc_t *tether_webrtc_create(const tether_webrtc_config_t *cfg)
 	const char *ice_servers[2] = {NULL, NULL};
 	char turn_buf[512] = {0};
 	int n_servers = 0;
-	if (cfg->stun_url && *cfg->stun_url) {
+	// TETHER_NO_STUN=1 disables STUN entirely → only host candidates are
+	// gathered. This is the auto-detect fallback for same-host testing
+	// where srflx candidates from STUN can't be hairpinned back through
+	// the local NAT. Production deployments (different machines) keep STUN
+	// for NAT traversal.
+	const char *no_stun = getenv("TETHER_NO_STUN");
+	if (cfg->stun_url && *cfg->stun_url && !(no_stun && strcmp(no_stun, "1") == 0)) {
 		ice_servers[n_servers++] = cfg->stun_url;
 	}
 	if (cfg->turn_url && *cfg->turn_url) {
@@ -177,10 +184,16 @@ tether_webrtc_t *tether_webrtc_create(const tether_webrtc_config_t *cfg)
 		ice_servers[n_servers++] = turn_buf;
 	}
 
+	// TETHER_BIND_LOOPBACK=1 forces juice to bind all UDP sockets to 127.0.0.1.
+	// Combined with TETHER_NO_STUN this gives a deterministic same-host test
+	// path that doesn't depend on LAN multicast / kernel routing quirks for
+	// reverse-path host-to-host packets.
+	const char *bind_loopback = getenv("TETHER_BIND_LOOPBACK");
 	rtcConfiguration pc_cfg = {
 		.iceServers = ice_servers,
 		.iceServersCount = n_servers,
 		.disableAutoNegotiation = false,
+		.bindAddress = (bind_loopback && strcmp(bind_loopback, "1") == 0) ? "127.0.0.1" : NULL,
 	};
 
 	int pc = rtcCreatePeerConnection(&pc_cfg);
@@ -258,6 +271,7 @@ bool tether_webrtc_add_remote_ice(tether_webrtc_t *w, const char *candidate, con
 	if (!w || !candidate) {
 		return false;
 	}
+	tether_log_info("webrtc: remote ICE candidate mid=%s: %s", mid, candidate);
 	int rc = rtcAddRemoteCandidate(w->pc, candidate, mid);
 	if (rc < 0) {
 		tether_log_warning("webrtc: addRemoteCandidate rc=%d", rc);

@@ -271,13 +271,16 @@ export class Room {
   }
 
   private relayToPeer(from: PeerConn, msg: SignalMsg): void {
+    // Receiver → sender: messages typically carry peer_id="sender" (a
+    // literal alias the client uses because it doesn't know the sender's
+    // UUID). Treat that as "find the sender", and rewrite peer_id so the
+    // sender sees who the message came from.
+    if (from.role === 'receiver' && (!msg.peer_id || msg.peer_id === 'sender')) {
+      const sender = this.findSender();
+      if (sender) sender.ws.send(JSON.stringify({ ...msg, peer_id: from.id }));
+      return;
+    }
     if (!msg.peer_id) {
-      // Sender→receiver relay uses peer_id; receiver→sender uses the
-      // sender's implicit id (we look it up).
-      if (from.role === 'receiver') {
-        const sender = this.findSender();
-        if (sender) sender.ws.send(JSON.stringify({ ...msg, peer_id: from.id }));
-      }
       return;
     }
     const target = this.peers.get(msg.peer_id);
