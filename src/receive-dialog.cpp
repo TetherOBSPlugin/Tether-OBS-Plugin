@@ -10,12 +10,14 @@ extern "C" {
 #include "receive-session.h"
 #include <obs-module.h>
 #include <obs.h>
+#include <util/platform.h>
 }
 
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDialog>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -65,9 +67,18 @@ private:
 	QLineEdit *tokenField_ = nullptr;
 	QPushButton *registerBtn_ = nullptr;
 	QListWidget *tokenList_ = nullptr;
+	QPushButton *renameBtn_ = nullptr;
 	QPushButton *forgetBtn_ = nullptr;
 	QLabel *hintLabel_ = nullptr;
 	QTimer *refreshTimer_ = nullptr;
+
+	// Last-snapshot stats per token for bitrate computation between refreshes.
+	struct StatSample {
+		uint64_t video_bytes;
+		uint64_t audio_bytes;
+		uint64_t t_ns;
+	};
+	std::unordered_map<std::string, StatSample> lastStats_;
 
 	// One session ref per registered token. Dialog owns refs; releasing here
 	// drops the dialog's hold (other subscribers — e.g. Tether-Quelle sources
@@ -109,9 +120,14 @@ ReceiveDialog::ReceiveDialog() : QDialog(nullptr)
 	root->addWidget(sessionsLabel);
 	tokenList_ = new QListWidget(this);
 	root->addWidget(tokenList_, 1);
+	auto *btnRow = new QHBoxLayout();
+	renameBtn_ = new QPushButton(fromTr("Receive.Rename"), this);
+	renameBtn_->setEnabled(false);
 	forgetBtn_ = new QPushButton(fromTr("Receive.Forget"), this);
 	forgetBtn_->setEnabled(false);
-	root->addWidget(forgetBtn_);
+	btnRow->addWidget(renameBtn_);
+	btnRow->addWidget(forgetBtn_);
+	root->addLayout(btnRow);
 
 	hintLabel_ = new QLabel(fromTr("Receive.Hint"), this);
 	hintLabel_->setWordWrap(true);
@@ -120,9 +136,30 @@ ReceiveDialog::ReceiveDialog() : QDialog(nullptr)
 
 	connect(registerBtn_, &QPushButton::clicked, this, &ReceiveDialog::onRegisterToken);
 	connect(tokenField_, &QLineEdit::returnPressed, this, &ReceiveDialog::onRegisterToken);
-	connect(tokenList_, &QListWidget::currentRowChanged, this,
-		[this](int row) { forgetBtn_->setEnabled(row >= 0); });
+	connect(tokenList_, &QListWidget::currentRowChanged, this, [this](int row) {
+		forgetBtn_->setEnabled(row >= 0);
+		renameBtn_->setEnabled(row >= 0);
+	});
 	connect(forgetBtn_, &QPushButton::clicked, this, &ReceiveDialog::onForgetToken);
+	connect(renameBtn_, &QPushButton::clicked, this, [this] {
+		QListWidgetItem *it = tokenList_->currentItem();
+		if (!it) {
+			return;
+		}
+		QString token = it->data(Qt::UserRole).toString();
+		if (token.isEmpty()) {
+			return;
+		}
+		const char *cur = tether_known_tokens_get_name(token.toUtf8().constData());
+		bool ok = false;
+		QString name = QInputDialog::getText(this, fromTr("Receive.Rename.Title"),
+						     fromTr("Receive.Rename.Prompt"), QLineEdit::Normal,
+						     cur ? QString::fromUtf8(cur) : QString(), &ok);
+		if (ok) {
+			tether_known_tokens_set_name(token.toUtf8().constData(), name.toUtf8().constData());
+			refreshTokenList();
+		}
+	});
 
 	// Adopt every persisted known token as a live session immediately, so
 	// reopening the dialog after restart picks up where we left off.
@@ -210,13 +247,12 @@ void ReceiveDialog::refreshTokenList()
 	}
 	tokenList_->clear();
 
-	// Pull the canonical set of tokens from the persisted registry — keeps
-	// what we show in lock-step with what survives a restart.
 	size_t n = 0;
-	char **persisted = tether_known_tokens_snapshot(&n);
+	char **names = nullptr;
+	char **persisted = tether_known_tokens_snapshot_with_names(&n, &names);
+	uint64_t now_ns = os_gettime_ns();
 	for (size_t i = 0; i < n; ++i) {
 		std::string tok = persisted[i];
-		// Make sure we hold a session ref for every persisted token.
 		if (sessions_.find(tok) == sessions_.end()) {
 			tether_receive_session_t *s = tether_receive_session_get(tok.c_str());
 			if (s) {
@@ -226,7 +262,30 @@ void ReceiveDialog::refreshTokenList()
 		tether_receive_session_t *s = sessions_.count(tok) ? sessions_[tok] : nullptr;
 		tether_receive_state_t st = tether_receive_session_state(s);
 		QString state = fromTr(state_label_key(st));
-		QString label = QStringLiteral("%1   —   %2").arg(QString::fromUtf8(tok.c_str()), state);
+
+		// Compose: name | TOKEN — state · bitrate
+		QString display = names[i] ? QString::fromUtf8(names[i]) : QString::fromUtf8(tok.c_str());
+		QString tail = state;
+		if (s && st == TETHER_RX_STATE_CONNECTED) {
+			tether_receive_stats_t now_stats{};
+			tether_receive_session_get_stats(s, &now_stats);
+			auto it = lastStats_.find(tok);
+			if (it != lastStats_.end()) {
+				double dt = (now_ns - it->second.t_ns) / 1e9;
+				if (dt > 0.1) {
+					double v_kbps =
+						(now_stats.video_bytes - it->second.video_bytes) * 8.0 / dt / 1000.0;
+					double a_kbps =
+						(now_stats.audio_bytes - it->second.audio_bytes) * 8.0 / dt / 1000.0;
+					tail += QStringLiteral(" · v %1 kbps · a %2 kbps")
+							.arg(v_kbps, 0, 'f', 0)
+							.arg(a_kbps, 0, 'f', 0);
+				}
+			}
+			lastStats_[tok] = {now_stats.video_bytes, now_stats.audio_bytes, now_ns};
+		}
+
+		QString label = QStringLiteral("%1   —   %2").arg(display, tail);
 		auto *item = new QListWidgetItem(label, tokenList_);
 		item->setData(Qt::UserRole, QString::fromUtf8(tok.c_str()));
 		if (QString::fromUtf8(tok.c_str()) == selected) {
@@ -234,6 +293,7 @@ void ReceiveDialog::refreshTokenList()
 		}
 	}
 	tether_known_tokens_free_snapshot(persisted, n);
+	tether_known_tokens_free_names(names, n);
 
 	// Drop session refs for tokens that disappeared from the registry.
 	for (auto it = sessions_.begin(); it != sessions_.end();) {

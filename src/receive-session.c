@@ -39,6 +39,10 @@ struct tether_receive_session {
 
 	pthread_mutex_t lock;
 	DARRAY(struct tether_rx_subscription *) subs;
+
+	// Stats: updated under lock when packets arrive. Reads also take the
+	// lock to get a coherent snapshot.
+	tether_receive_stats_t stats;
 };
 
 // Global registry of live sessions, keyed by token (one session per token).
@@ -102,6 +106,9 @@ static void wrtc_video_cb(void *user, const uint8_t *data, size_t size, int64_t 
 {
 	tether_receive_session_t *s = user;
 	pthread_mutex_lock(&s->lock);
+	s->stats.video_bytes += size;
+	s->stats.video_packets += 1;
+	s->stats.last_update_ns = os_gettime_ns();
 	size_t n = s->subs.num;
 	struct tether_rx_subscription **copy = n > 0 ? bmalloc(n * sizeof(*copy)) : NULL;
 	for (size_t i = 0; i < n; ++i) {
@@ -123,6 +130,9 @@ static void wrtc_audio_cb(void *user, const uint8_t *data, size_t size, int64_t 
 {
 	tether_receive_session_t *s = user;
 	pthread_mutex_lock(&s->lock);
+	s->stats.audio_bytes += size;
+	s->stats.audio_packets += 1;
+	s->stats.last_update_ns = os_gettime_ns();
 	size_t n = s->subs.num;
 	struct tether_rx_subscription **copy = n > 0 ? bmalloc(n * sizeof(*copy)) : NULL;
 	for (size_t i = 0; i < n; ++i) {
@@ -402,6 +412,16 @@ tether_receive_state_t tether_receive_session_state(tether_receive_session_t *s)
 const char *tether_receive_session_token(tether_receive_session_t *s)
 {
 	return s ? s->token : NULL;
+}
+
+void tether_receive_session_get_stats(tether_receive_session_t *s, tether_receive_stats_t *out)
+{
+	if (!s || !out) {
+		return;
+	}
+	pthread_mutex_lock(&s->lock);
+	*out = s->stats;
+	pthread_mutex_unlock(&s->lock);
 }
 
 tether_rx_subscription_t *tether_receive_session_subscribe(tether_receive_session_t *s, tether_rx_video_cb_t on_video,

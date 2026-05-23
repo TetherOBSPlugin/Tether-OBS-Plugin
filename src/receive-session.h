@@ -64,6 +64,18 @@ tether_receive_state_t tether_receive_session_state(tether_receive_session_t *s)
 // Token associated with this session (NUL-terminated, owned by session).
 const char *tether_receive_session_token(tether_receive_session_t *s);
 
+// Lightweight stats counters updated as media packets land. Snapshot is
+// safe to take from any thread.
+typedef struct {
+	uint64_t video_bytes;
+	uint64_t audio_bytes;
+	uint64_t video_packets;
+	uint64_t audio_packets;
+	uint64_t last_update_ns; // os_gettime_ns at most recent packet
+} tether_receive_stats_t;
+
+void tether_receive_session_get_stats(tether_receive_session_t *s, tether_receive_stats_t *out);
+
 // Subscribe to frames and state changes. Each subscription holds a ref while
 // active; call _unsubscribe with the same handle to release. Returns NULL on
 // invalid input.

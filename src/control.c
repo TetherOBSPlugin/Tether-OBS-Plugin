@@ -187,7 +187,7 @@ static void cmd_sender_create(struct tether_control *c, int fd, char *args)
 	cfg.video_bitrate_kbps = 6000;
 	cfg.max_receivers = 4;
 	cfg.token_ttl_minutes = 30;
-	cfg.reusable_token = false;
+	cfg.reusable_token = true;
 
 	tether_sender_callbacks_t cbs = {0};
 	cbs.user = c;

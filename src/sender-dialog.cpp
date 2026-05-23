@@ -284,7 +284,7 @@ void SenderDialog::onGenerateToken()
 	cfg.video_bitrate_kbps = 6000;
 	cfg.max_receivers = 4;
 	cfg.token_ttl_minutes = 30;
-	cfg.reusable_token = false;
+	cfg.reusable_token = true;
 	cfg.twitch_st_mode = (modeCombo_->currentData().toInt() == 1);
 
 	tether_sender_callbacks_t cbs{};
