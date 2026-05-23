@@ -228,16 +228,25 @@ tether_webrtc_t *tether_webrtc_create(const tether_webrtc_config_t *cfg)
 		ice_servers[n_servers++] = turn_buf;
 	}
 
-	// TETHER_BIND_LOOPBACK=1 forces juice to bind all UDP sockets to 127.0.0.1.
-	// Combined with TETHER_NO_STUN this gives a deterministic same-host test
-	// path that doesn't depend on LAN multicast / kernel routing quirks for
-	// reverse-path host-to-host packets.
+	// Bind-address overrides (host-side, no negotiation involved):
+	//   TETHER_BIND_LOOPBACK=1   → 127.0.0.1   (same-host loopback testing)
+	//   TETHER_BIND_IP=<addr>    → <addr>      (force a specific NIC, e.g.
+	//                                          the LAN IP, so juice does
+	//                                          not gather/probe via docker/
+	//                                          libvirt/tailscale interfaces)
 	const char *bind_loopback = getenv("TETHER_BIND_LOOPBACK");
+	const char *bind_ip = getenv("TETHER_BIND_IP");
+	const char *bind_addr = NULL;
+	if (bind_loopback && strcmp(bind_loopback, "1") == 0) {
+		bind_addr = "127.0.0.1";
+	} else if (bind_ip && *bind_ip) {
+		bind_addr = bind_ip;
+	}
 	rtcConfiguration pc_cfg = {
 		.iceServers = ice_servers,
 		.iceServersCount = n_servers,
 		.disableAutoNegotiation = false,
-		.bindAddress = (bind_loopback && strcmp(bind_loopback, "1") == 0) ? "127.0.0.1" : NULL,
+		.bindAddress = bind_addr,
 	};
 
 	int pc = rtcCreatePeerConnection(&pc_cfg);
