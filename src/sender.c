@@ -9,6 +9,10 @@
 #include <obs.h>
 #include <string.h>
 
+#include <libavcodec/avcodec.h>
+#include <libavutil/imgutils.h>
+#include <libavutil/opt.h>
+#include <libswscale/swscale.h>
 #include <util/bmem.h>
 #include <util/darray.h>
 #include <util/dstr.h>
@@ -49,6 +53,18 @@ struct receiver_session {
 	tether_audio_sender_t *audio; // per-session opus pipeline
 	struct session_ctx *ctx;      // owned; used as webrtc 'user' pointer
 	int video_track_id;
+
+	// Per-session H.264 encoder. We keep one encoder per receiver because
+	// max_bitrate_kbps and codec choice are configurable per session and a
+	// shared encoder would have to be reset on every join.
+	AVCodecContext *enc;
+	AVFrame *enc_in;        // input YUV frame fed to avcodec_send_frame
+	AVPacket *enc_pkt;      // output packet drained from avcodec_receive_packet
+	struct SwsContext *sws; // OBS pixel format → YUV420P, allocated lazily
+	int enc_width;
+	int enc_height;
+	enum AVPixelFormat enc_in_fmt;
+	int64_t frame_pts; // monotonically increasing PTS we hand to the encoder
 };
 
 struct tether_sender {
@@ -172,11 +188,29 @@ static void start_signaling_locked(struct tether_sender *s)
 	tether_signaling_connect(s->sig);
 }
 
+static void release_video_encoder(struct receiver_session *r)
+{
+	if (r->sws) {
+		sws_freeContext(r->sws);
+		r->sws = NULL;
+	}
+	if (r->enc_pkt) {
+		av_packet_free(&r->enc_pkt);
+	}
+	if (r->enc_in) {
+		av_frame_free(&r->enc_in);
+	}
+	if (r->enc) {
+		avcodec_free_context(&r->enc);
+	}
+}
+
 static void release_session(struct receiver_session *r)
 {
 	if (!r) {
 		return;
 	}
+	release_video_encoder(r);
 	if (r->audio) {
 		tether_audio_sender_release(r->audio);
 	}
@@ -271,14 +305,144 @@ static obs_properties_t *get_properties(void *data)
 	return tether_properties_for_sender(s ? s->parent : NULL);
 }
 
-// Filter passes the source through unchanged — we attach to capture, not
-// modify. Encoding happens on the dedicated encoder thread bound to each
-// session's video track in webrtc.c; the filter just keeps the OBS source
-// alive and present in the graph so the encoder receives frames via the
-// normal source-output path.
+static enum AVPixelFormat obs_to_av_pix_fmt(enum video_format f)
+{
+	switch (f) {
+	case VIDEO_FORMAT_I420:
+		return AV_PIX_FMT_YUV420P;
+	case VIDEO_FORMAT_NV12:
+		return AV_PIX_FMT_NV12;
+	case VIDEO_FORMAT_I422:
+		return AV_PIX_FMT_YUV422P;
+	case VIDEO_FORMAT_I444:
+		return AV_PIX_FMT_YUV444P;
+	case VIDEO_FORMAT_YUY2:
+		return AV_PIX_FMT_YUYV422;
+	case VIDEO_FORMAT_UYVY:
+		return AV_PIX_FMT_UYVY422;
+	case VIDEO_FORMAT_RGBA:
+		return AV_PIX_FMT_RGBA;
+	case VIDEO_FORMAT_BGRA:
+		return AV_PIX_FMT_BGRA;
+	case VIDEO_FORMAT_BGRX:
+		return AV_PIX_FMT_BGR0;
+	default:
+		return AV_PIX_FMT_NONE;
+	}
+}
+
+static bool ensure_encoder(struct receiver_session *r, int w, int h, enum AVPixelFormat in_fmt, int bitrate_kbps)
+{
+	if (r->enc && r->enc_width == w && r->enc_height == h && r->enc_in_fmt == in_fmt) {
+		return true;
+	}
+	// Either first frame or dimensions changed — rebuild the encoder.
+	release_video_encoder(r);
+	r->enc_width = w;
+	r->enc_height = h;
+	r->enc_in_fmt = in_fmt;
+	r->frame_pts = 0;
+
+	const AVCodec *codec = avcodec_find_encoder(AV_CODEC_ID_H264);
+	if (!codec) {
+		tether_log_error("sender: H.264 encoder not available in libavcodec");
+		return false;
+	}
+	r->enc = avcodec_alloc_context3(codec);
+	if (!r->enc) {
+		return false;
+	}
+	r->enc->width = w;
+	r->enc->height = h;
+	r->enc->pix_fmt = AV_PIX_FMT_YUV420P; // libdatachannel's H.264 RTP packetiser expects 4:2:0
+	r->enc->time_base = (AVRational){1, 1000000};
+	r->enc->framerate = (AVRational){30, 1};
+	r->enc->gop_size = 60;
+	r->enc->max_b_frames = 0; // low-latency: no B-frames
+	r->enc->bit_rate = (int64_t)bitrate_kbps * 1000;
+	av_opt_set(r->enc->priv_data, "preset", "veryfast", 0);
+	av_opt_set(r->enc->priv_data, "tune", "zerolatency", 0);
+	av_opt_set(r->enc->priv_data, "profile", "baseline", 0);
+	if (avcodec_open2(r->enc, codec, NULL) < 0) {
+		avcodec_free_context(&r->enc);
+		return false;
+	}
+	r->enc_in = av_frame_alloc();
+	r->enc_pkt = av_packet_alloc();
+	if (!r->enc_in || !r->enc_pkt) {
+		release_video_encoder(r);
+		return false;
+	}
+	r->enc_in->format = AV_PIX_FMT_YUV420P;
+	r->enc_in->width = w;
+	r->enc_in->height = h;
+	if (av_frame_get_buffer(r->enc_in, 32) < 0) {
+		release_video_encoder(r);
+		return false;
+	}
+	if (in_fmt != AV_PIX_FMT_YUV420P) {
+		r->sws = sws_getContext(w, h, in_fmt, w, h, AV_PIX_FMT_YUV420P, SWS_BILINEAR, NULL, NULL, NULL);
+		if (!r->sws) {
+			release_video_encoder(r);
+			return false;
+		}
+	}
+	tether_log_info("sender: encoder ready peer=%s %dx%d %d kbps", r->ctx->peer_id, w, h, bitrate_kbps);
+	return true;
+}
+
+static void encode_and_push(struct receiver_session *r, struct obs_source_frame *frame)
+{
+	enum AVPixelFormat in_fmt = obs_to_av_pix_fmt(frame->format);
+	if (in_fmt == AV_PIX_FMT_NONE) {
+		return; // unsupported source format — silently drop
+	}
+	struct tether_sender *s = r->ctx->sender;
+	if (!ensure_encoder(r, (int)frame->width, (int)frame->height, in_fmt, s->max_bitrate)) {
+		return;
+	}
+	if (r->sws) {
+		const uint8_t *src_planes[4] = {0};
+		int src_strides[4] = {0};
+		for (int p = 0; p < 4; ++p) {
+			src_planes[p] = frame->data[p];
+			src_strides[p] = (int)frame->linesize[p];
+		}
+		sws_scale(r->sws, src_planes, src_strides, 0, r->enc_height, r->enc_in->data, r->enc_in->linesize);
+	} else {
+		for (int p = 0; p < 3 && frame->data[p]; ++p) {
+			int plane_h = (p == 0) ? r->enc_height : r->enc_height / 2;
+			int src_stride = (int)frame->linesize[p];
+			int dst_stride = r->enc_in->linesize[p];
+			int copy_w = src_stride < dst_stride ? src_stride : dst_stride;
+			for (int y = 0; y < plane_h; ++y) {
+				memcpy(r->enc_in->data[p] + y * dst_stride, frame->data[p] + y * src_stride,
+				       (size_t)copy_w);
+			}
+		}
+	}
+	r->enc_in->pts = r->frame_pts++;
+	if (avcodec_send_frame(r->enc, r->enc_in) < 0) {
+		return;
+	}
+	while (avcodec_receive_packet(r->enc, r->enc_pkt) == 0) {
+		tether_webrtc_push_video(r->wrtc, r->video_track_id, r->enc_pkt->data, (size_t)r->enc_pkt->size,
+					 r->enc_pkt->pts);
+		av_packet_unref(r->enc_pkt);
+	}
+}
+
 static struct obs_source_frame *filter_video(void *data, struct obs_source_frame *frame)
 {
-	UNUSED_PARAMETER(data);
+	struct tether_sender *s = data;
+	if (!s || !frame || frame->width == 0 || frame->height == 0) {
+		return frame;
+	}
+	pthread_mutex_lock(&s->lock);
+	for (size_t i = 0; i < s->sessions.num; ++i) {
+		encode_and_push(s->sessions.array[i], frame);
+	}
+	pthread_mutex_unlock(&s->lock);
 	return frame;
 }
 
