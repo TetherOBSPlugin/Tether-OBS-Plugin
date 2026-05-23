@@ -7,6 +7,12 @@ project(${_name} VERSION ${_version})
 option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI extensions" OFF)
 option(ENABLE_QT "Use Qt functionality" OFF)
 
+# We ship as a shared module (loaded by OBS), so every static library we pull
+# in via FetchContent (opus, libdatachannel, usrsctp, libsrtp, libjuice, ...)
+# must be built position-independent. aarch64 enforces this strictly; x86_64
+# is laxer but the variable harmonises behaviour across runners.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 include(compilerconfig)
 include(defaults)
 include(helpers)
@@ -70,11 +76,10 @@ if(NOT LibDataChannel_FOUND)
   set(CMAKE_COMPILE_WARNING_AS_ERROR ${_tether_saved_werror})
 endif()
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE LibDataChannel::LibDataChannel)
-# libdatachannel exposes the WebSocket + media APIs only when the matching
-# defines are set on the consuming translation unit. Linux picks them up via
-# INTERFACE propagation, macOS sometimes does not — set them directly so the
-# build is deterministic across all three runners.
-target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE RTC_ENABLE_WEBSOCKET=1 RTC_ENABLE_MEDIA=1)
+# libdatachannel adds RTC_ENABLE_WEBSOCKET / RTC_ENABLE_MEDIA as PUBLIC
+# compile definitions on its targets (datachannel, datachannel-static), so they
+# propagate to us through the link. Do not redefine them here — Apple-Clang
+# promotes the duplicate to -Werror=macro-redefined.
 
 target_sources(
   ${CMAKE_PROJECT_NAME}
@@ -106,18 +111,23 @@ if(WIN32)
 endif()
 
 # Opus is required for our multi-track audio encode/decode (used directly in
-# audio.c). Found via pkg-config on Linux/macOS; on Windows the obs-deps
-# bundle ships opus.lib under its own prefix, so we hint find_library at
-# CMAKE_PREFIX_PATH which the OBS template populates with the obs-deps root.
-find_package(PkgConfig QUIET)
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(OPUS REQUIRED IMPORTED_TARGET opus)
-  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE PkgConfig::OPUS)
-else()
-  find_library(OPUS_LIBRARY NAMES opus HINTS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES lib lib64 REQUIRED)
-  find_path(OPUS_INCLUDE_DIR opus/opus.h HINTS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES include REQUIRED)
-  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ${OPUS_LIBRARY})
-  target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${OPUS_INCLUDE_DIR})
-endif()
+# audio.c). The obs-deps Windows bundle ships only opus headers, not the .lib,
+# so we cannot rely on find_library across all three platforms. Fetch opus from
+# upstream at a pinned tag instead — same source on every runner, ~30s extra
+# configure/build time. Save/restore CMAKE_COMPILE_WARNING_AS_ERROR around the
+# fetch for the same reason we do for libdatachannel: opus' warning hygiene
+# does not match the OBS template's strict umbrella.
+include(FetchContent)
+set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+set(_tether_saved_werror_opus ${CMAKE_COMPILE_WARNING_AS_ERROR})
+set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
+FetchContent_Declare(opus GIT_REPOSITORY https://github.com/xiph/opus.git GIT_TAG v1.5.2 GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(opus)
+set(CMAKE_COMPILE_WARNING_AS_ERROR ${_tether_saved_werror_opus})
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE opus)
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
