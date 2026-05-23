@@ -13,6 +13,7 @@
 #include "hub-dialog.hpp"
 #include "known-tokens.h"
 #include "log.h"
+#include "receive-session.h"
 #include "sender.h"
 #include "source.h"
 #include "webrtc.h"
@@ -46,6 +47,7 @@ bool obs_module_load(void)
 	}
 
 	tether_known_tokens_init();
+	tether_receive_session_init();
 	tether_source_register();
 	tether_sender_register();
 	obs_frontend_add_tools_menu_item(obs_module_text("Source.Sender.Name"), on_tools_menu_clicked, NULL);
@@ -57,6 +59,7 @@ void obs_module_unload(void)
 	tether_close_all_dialogs();
 	tether_sender_shutdown();
 	tether_source_shutdown();
+	tether_receive_session_shutdown();
 	tether_known_tokens_shutdown();
 	tether_webrtc_global_shutdown();
 	tether_log_info("unloaded");

@@ -173,6 +173,8 @@ target_sources(
     src/receive-dialog.hpp
     src/known-tokens.c
     src/known-tokens.h
+    src/receive-session.c
+    src/receive-session.h
     src/properties.c
     src/properties.h
     src/log.h
