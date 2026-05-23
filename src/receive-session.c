@@ -223,6 +223,19 @@ static void signaling_event(void *user, tether_signaling_event_t evt, const teth
 		set_state(s, TETHER_RX_STATE_FAILED);
 		break;
 	case TETHER_SIG_EVT_SDP_OFFER: {
+		// Senders re-send accepted+SDP+ICE if their side times out (DTLS
+		// stuck etc.). Ignoring the duplicate is the safe response — we
+		// already have a PeerConnection negotiating; applying a fresh
+		// remote description on top of it puts libdatachannel into an
+		// inconsistent state where every subsequent addRemoteCandidate
+		// returns RTC_ERR_INVALID(-2). If the user wants to retry, they
+		// can re-register the token.
+		tether_receive_state_t cur = os_atomic_load_long(&s->state);
+		if (cur == TETHER_RX_STATE_NEGOTIATING || cur == TETHER_RX_STATE_CONNECTED) {
+			tether_log_info("rx-session(%s): ignoring duplicate SDP offer (state=%s)", s->token,
+					tether_receive_state_name(cur));
+			break;
+		}
 		set_state(s, TETHER_RX_STATE_NEGOTIATING);
 		const char *json = msg ? msg->json_payload : NULL;
 		const char *p = json ? strstr(json, "\"sdp\":\"") : NULL;
