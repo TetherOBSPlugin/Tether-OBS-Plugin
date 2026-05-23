@@ -41,7 +41,7 @@ static volatile long g_init_count = 0;
 bool tether_webrtc_global_init(void)
 {
 	if (os_atomic_inc_long(&g_init_count) == 1) {
-		rtcInitLogger(RTC_LOG_DEBUG, NULL);
+		rtcInitLogger(RTC_LOG_WARNING, NULL);
 		tether_log_info("webrtc: libdatachannel initialised");
 	}
 	return true;

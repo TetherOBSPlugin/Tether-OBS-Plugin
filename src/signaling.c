@@ -136,7 +136,13 @@ static void send_raw(tether_signaling_t *sig, const char *json)
 	if (sig->ws <= 0) {
 		return;
 	}
-	int rc = rtcSendMessage(sig->ws, json, (int)strlen(json));
+	// libdatachannel signals text vs binary via the sign of the size
+	// argument: positive = binary, negative = text where |size| includes
+	// the trailing NUL. Cloudflare Workers' WebSocket handler only
+	// accepts JSON as text frames and drops the connection on binary, so
+	// we must send with a negative size.
+	int len = (int)strlen(json);
+	int rc = rtcSendMessage(sig->ws, json, -(len + 1));
 	if (rc < 0) {
 		tether_log_warning("signaling: send failed rc=%d", rc);
 	}
