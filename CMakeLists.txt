@@ -189,6 +189,13 @@ set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
 set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
 set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+# Opus' CMake mis-detects NEON support on macOS arm64 (xiph/opus GitLab
+# issue #2372): it triggers OPUS_MAY_HAVE_NEON without passing the
+# -mfloat-abi flag clang needs to compile <arm_neon.h>, so celt/arm/*.c
+# fails with "NEON intrinsics not available with the soft-float ABI".
+# Disable all CPU intrinsics to fall back to portable C. The performance
+# hit is irrelevant for a 96 kbps voice/audio codec on modern hardware.
+set(OPUS_DISABLE_INTRINSICS ON CACHE BOOL "" FORCE)
 set(_tether_saved_werror_opus ${CMAKE_COMPILE_WARNING_AS_ERROR})
 set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
 FetchContent_Declare(opus GIT_REPOSITORY https://github.com/xiph/opus.git GIT_TAG v1.5.2 GIT_SHALLOW TRUE)
