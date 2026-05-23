@@ -5,6 +5,18 @@
 
 #include "control.h"
 
+#ifdef _WIN32
+// The CLI control plane uses AF_UNIX sockets via the POSIX API. Windows 10+
+// supports AF_UNIX in winsock, but with a different header layout and
+// init dance; rather than maintain two implementations for what is
+// strictly a developer/test surface, we compile out the entire module on
+// Windows and let init/shutdown be no-ops.
+
+void tether_control_init(void) {}
+void tether_control_shutdown(void) {}
+
+#else
+
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -541,3 +553,5 @@ void tether_control_shutdown(void)
 	bfree(g_ctrl);
 	g_ctrl = NULL;
 }
+
+#endif // !_WIN32
