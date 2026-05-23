@@ -1,0 +1,25 @@
+name = "tether-signaling"
+main = "src/index.ts"
+compatibility_date = "2025-01-15"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["Room"]
+
+[observability]
+enabled = true
+
+[vars]
+# Token TTL upper bound (minutes). Sender can request up to this value.
+MAX_TOKEN_TTL_MINUTES = "1440"
+# Rate-limit window for token-bound attempts (seconds).
+RATE_LIMIT_WINDOW_SECONDS = "60"
+# Max failed attempts per token within the window before lockout.
+RATE_LIMIT_MAX_ATTEMPTS = "10"
+# Lockout duration after rate limit is hit (seconds).
+LOCKOUT_SECONDS = "300"

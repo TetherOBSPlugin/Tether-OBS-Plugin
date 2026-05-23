@@ -1,0 +1,40 @@
+{
+  "dependencies": {
+    "obs-studio": {
+      "version": "31.0.0",
+      "repository": "https://github.com/obsproject/obs-studio.git",
+      "branch": "31.0.0",
+      "hash": null
+    },
+    "prebuilt": {
+      "version": "2025-01-08",
+      "baseUrl": "https://github.com/obsproject/obs-deps/releases/download",
+      "label": "Pre-Built Dependencies",
+      "hashes": {
+        "macos": null,
+        "windows-x64": null
+      }
+    },
+    "qt6": {
+      "version": "6.7.2",
+      "baseUrl": "https://github.com/obsproject/obs-deps/releases/download",
+      "label": "Pre-Built Qt6 Dependencies",
+      "hashes": {
+        "macos": null,
+        "windows-x64": null
+      }
+    }
+  },
+  "name": "tether",
+  "displayName": "Tether",
+  "version": "0.1.0",
+  "author": "Tether contributors",
+  "website": "https://github.com/TetherOBSPlugin/Tether-OBS-Plugin",
+  "email": "tether@example.invalid",
+  "uuid": "8b1d0d9e-3b22-4f5d-8a3f-1f9d2c4a0f00",
+  "platformConfig": {
+    "macos": {
+      "bundleId": "com.tetherobsplugin.tether"
+    }
+  }
+}
