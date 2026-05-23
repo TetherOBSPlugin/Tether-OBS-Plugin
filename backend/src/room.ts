@@ -57,7 +57,7 @@ interface SignalMsg {
 
 const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
-function generateToken(): string {
+export function generateToken(): string {
   // 12 chars × 5 bits ≈ 60 bits entropy.
   const groups: string[] = [];
   for (let g = 0; g < 3; g++) {
@@ -99,6 +99,13 @@ export class Room {
 
     const url = new URL(request.url);
     const tokenParam = url.searchParams.get('token');
+    // The edge in index.ts has already minted the token for fresh senders and
+    // routed both sender + receiver to this DO under the same name. Adopt that
+    // name as our token on first sender hello — overrides any stale storage.
+    const roomHint = request.headers.get('X-Tether-Room');
+    if (roomHint && !this.token) {
+      this.token = roomHint;
+    }
 
     server.addEventListener('message', (event) => {
       this.onMessage(server, event, tokenParam);
@@ -154,17 +161,16 @@ export class Room {
     tokenParam: string | null,
   ): Promise<void> {
     if (msg.role === 'sender') {
-      // Mint a token on first sender hello. If a token is already issued
-      // for this room (reusable + same sender), reuse it.
-      if (!this.token) {
-        const ttl = Math.min(
-          msg.ttl_minutes ?? 30,
-          Number(this.env.MAX_TOKEN_TTL_MINUTES),
-        );
-        this.token = generateToken();
+      // The token is the DO's own name, set in fetch() from X-Tether-Room.
+      // Persist TTL / reusable on first sender hello so receivers landing on
+      // the same DO later see the token as alive.
+      if (!this.expiresAt) {
+        const ttl = Math.min(msg.ttl_minutes ?? 30, Number(this.env.MAX_TOKEN_TTL_MINUTES));
         this.expiresAt = Date.now() + ttl * 60_000;
         this.reusable = !!msg.reusable;
-        await this.state.storage.put('token', this.token);
+        if (this.token) {
+          await this.state.storage.put('token', this.token);
+        }
         await this.state.storage.put('expiresAt', this.expiresAt);
         await this.state.storage.put('reusable', this.reusable);
       }

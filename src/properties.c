@@ -13,7 +13,7 @@
 // Compile-time managed default. Replace the subdomain with the one your
 // deployed Worker script registers under (configurable in CI).
 #ifndef TETHER_DEFAULT_SIGNALING_URL
-#define TETHER_DEFAULT_SIGNALING_URL "wss://tether-signaling.workers.dev/v1"
+#define TETHER_DEFAULT_SIGNALING_URL "wss://tether-signaling.tether-plugin.workers.dev/v1"
 #endif
 
 const char *tether_default_server_url(void)

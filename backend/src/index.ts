@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tether contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-import { Room } from './room';
+import { Room, generateToken } from './room';
 export { Room };
 
 interface Env {
@@ -15,7 +15,8 @@ interface Env {
 // Token format: TTHR-XXXX-XXXX-XXXX, 32-char ambiguity-free alphabet.
 // We validate format here so a malformed token never gets a Durable Object
 // instantiated for it (cheap DoS protection).
-const TOKEN_REGEX = /^TTHR-[A-HJKMNPQRSTUVWXYZ2-9]{4}-[A-HJKMNPQRSTUVWXYZ2-9]{4}-[A-HJKMNPQRSTUVWXYZ2-9]{4}$/;
+const TOKEN_REGEX =
+  /^TTHR-[A-HJKMNPQRSTUVWXYZ2-9]{4}-[A-HJKMNPQRSTUVWXYZ2-9]{4}-[A-HJKMNPQRSTUVWXYZ2-9]{4}$/;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -26,9 +27,6 @@ export default {
       return new Response('ok', { status: 200 });
     }
 
-    // The main path: /v1 — a fresh sender opens a WebSocket here, gets back
-    // a token to share. The DO ID is the token itself (case-folded), which
-    // keeps a single instance per active sharing session.
     if (url.pathname !== '/v1') {
       return new Response('not found', { status: 404 });
     }
@@ -38,8 +36,12 @@ export default {
       return new Response('expected websocket', { status: 426 });
     }
 
-    // Senders connect without a token; the Room generates one. Receivers
-    // connect with ?token=TTHR-...; the room id is derived from the token.
+    // Routing: the DO id IS the token. A receiver knows the token and supplies
+    // it via ?token=. A fresh sender connects without one, so we mint the
+    // token here at the edge and route to the matching DO. We pass the minted
+    // token through to the DO via the X-Tether-Room header so the DO doesn't
+    // have to mint its own (and so sender + receiver always end up in the
+    // same DO).
     const tokenParam = url.searchParams.get('token');
     let roomName: string;
     if (tokenParam) {
@@ -49,13 +51,13 @@ export default {
       }
       roomName = normalised;
     } else {
-      // Fresh sender: mint a one-time-use placeholder room id; the Room
-      // will replace it with the generated token on hello.
-      roomName = 'pending-' + crypto.randomUUID();
+      roomName = generateToken();
     }
 
     const id = env.ROOMS.idFromName(roomName);
     const stub = env.ROOMS.get(id);
-    return stub.fetch(request);
+    const forwarded = new Request(request.url, request);
+    forwarded.headers.set('X-Tether-Room', roomName);
+    return stub.fetch(forwarded);
   },
 };

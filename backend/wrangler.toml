@@ -9,7 +9,10 @@ class_name = "Room"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["Room"]
+# Cloudflare's free plan requires the SQLite-backed Durable Object storage
+# class — new_classes is paid-only. Functionally identical for our use case
+# (we only persist token/expiry/reusable, not large rows).
+new_sqlite_classes = ["Room"]
 
 [observability]
 enabled = true
