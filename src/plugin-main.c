@@ -10,8 +10,8 @@
 #include <obs-module.h>
 #include <plugin-support.h>
 
+#include "hub-dialog.hpp"
 #include "log.h"
-#include "sender-dialog.hpp"
 #include "sender.h"
 #include "source.h"
 #include "webrtc.h"
@@ -19,7 +19,7 @@
 static void on_tools_menu_clicked(void *priv)
 {
 	UNUSED_PARAMETER(priv);
-	tether_open_sender_dialog();
+	tether_open_hub_dialog();
 }
 
 OBS_DECLARE_MODULE()
@@ -52,7 +52,7 @@ bool obs_module_load(void)
 
 void obs_module_unload(void)
 {
-	tether_close_sender_dialog();
+	tether_close_all_dialogs();
 	tether_sender_shutdown();
 	tether_source_shutdown();
 	tether_webrtc_global_shutdown();

@@ -167,6 +167,10 @@ target_sources(
     src/sender.h
     src/sender-dialog.cpp
     src/sender-dialog.hpp
+    src/hub-dialog.cpp
+    src/hub-dialog.hpp
+    src/receive-dialog.cpp
+    src/receive-dialog.hpp
     src/properties.c
     src/properties.h
     src/log.h
