@@ -105,7 +105,6 @@ SenderDialog::SenderDialog() : QDialog(nullptr)
 	root->addWidget(srcLabel);
 	sourceCombo_ = new QComboBox(this);
 	root->addWidget(sourceCombo_);
-	populateSourceList();
 
 	auto *audioLabel = new QLabel(fromTr("Settings.AudioTracks"), this);
 	root->addWidget(audioLabel);
@@ -168,6 +167,9 @@ SenderDialog::SenderDialog() : QDialog(nullptr)
 		acceptBtn_->setEnabled(ok);
 		rejectBtn_->setEnabled(ok);
 	});
+
+	// All widgets exist now — safe to populate the source / audio lists.
+	populateSourceList();
 }
 
 SenderDialog::~SenderDialog()
