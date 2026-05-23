@@ -73,12 +73,19 @@ static void set_state(tether_signaling_t *sig, tether_signaling_state_t s)
 
 // Very small JSON helpers — we only need to look up string fields by key
 // in a flat object. Avoids pulling in a full JSON library.
+//
+// Subtlety: the *key* "foo" in {"foo":"bar"} is preceded by `{` or `,` and
+// followed by `":`; the *value* "foo" in {"x":"foo","foo":"bar"} matches the
+// same naive "foo" substring search but is followed by `"` and `,`. We must
+// therefore skip occurrences whose post-quote separator is not `:`, otherwise
+// json_find_str(json, "token") on {"type":"token","token":"TTHR-..."} returns
+// the empty value-side of "type" instead of the actual token.
 static const char *json_find_str(const char *json, const char *key, size_t *out_len)
 {
 	size_t klen = strlen(key);
 	const char *p = json;
 	while ((p = strstr(p, key)) != NULL) {
-		// Require quote-key-quote
+		// Require quote-key-quote.
 		if (p == json || *(p - 1) != '"') {
 			++p;
 			continue;
@@ -87,14 +94,18 @@ static const char *json_find_str(const char *json, const char *key, size_t *out_
 			++p;
 			continue;
 		}
-		p += klen + 1;
-		while (*p == ':' || *p == ' ') {
+		const char *after = p + klen + 1;
+		while (*after == ':' || *after == ' ') {
+			++after;
+		}
+		// The first char after the closing quote must be `:` (after optional
+		// whitespace) for this to be a key/value pair. If it is `,` or `}`
+		// we matched the value of some other key — keep searching.
+		if (*after != '"') {
 			++p;
+			continue;
 		}
-		if (*p != '"') {
-			return NULL;
-		}
-		++p;
+		p = after + 1;
 		const char *start = p;
 		while (*p && *p != '"') {
 			if (*p == '\\' && p[1]) {
@@ -150,6 +161,7 @@ static void send_raw(tether_signaling_t *sig, const char *json)
 
 static void handle_message(tether_signaling_t *sig, const char *json)
 {
+	tether_log_info("signaling: handle_message json=%.60s", json);
 	if (json_eq_str(json, "type", "token")) {
 		char *tok = json_dup_str(json, "token");
 		pthread_mutex_lock(&sig->lock);
@@ -246,6 +258,8 @@ static void RTC_API on_message(int id, const char *msg, int size, void *user)
 {
 	UNUSED_PARAMETER(id);
 	tether_signaling_t *sig = user;
+	tether_log_info("signaling: on_message size=%d msg=%.40s%s", size, msg ? msg : "(null)",
+			(msg && size != 0 && (int)strlen(msg) > 40) ? "..." : "");
 	if (!msg) {
 		return;
 	}
