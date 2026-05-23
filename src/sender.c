@@ -33,10 +33,21 @@ static inline char *dup_span(const char *p, size_t n)
 	return out;
 }
 
+// Per-session user-data passed to libdatachannel callbacks. We allocate one
+// per receiver so the SDP/ICE/state callbacks can route by peer_id — without
+// this, every callback fires with the same generic struct tether_sender* and
+// has no way to identify which receiver produced the event.
+struct session_ctx {
+	struct tether_sender *sender;
+	char peer_id[TETHER_PEER_ID_MAX];
+};
+
 // One outgoing receiver session.
 struct receiver_session {
 	char peer_id[TETHER_PEER_ID_MAX];
 	tether_webrtc_t *wrtc;
+	tether_audio_sender_t *audio; // per-session opus pipeline
+	struct session_ctx *ctx;      // owned; used as webrtc 'user' pointer
 	int video_track_id;
 };
 
@@ -61,7 +72,6 @@ struct tether_sender {
 
 	tether_signaling_t *sig;
 	tether_admission_t *adm;
-	tether_audio_sender_t *audio_send;
 	DARRAY(struct receiver_session *) sessions;
 
 	pthread_mutex_t lock;
@@ -81,8 +91,6 @@ static void start_signaling_locked(struct tether_sender *s);
 static void session_local_sdp(void *user, const char *type, const char *sdp);
 static void session_local_ice(void *user, const char *cand, const char *mid, int mline);
 static void session_state(void *user, tether_webrtc_state_t state);
-static void session_video(void *u, const uint8_t *d, size_t n, int64_t p, int t);
-static void session_audio(void *u, const uint8_t *d, size_t n, int64_t p, int t);
 
 static void on_admission_changed(void *user, const tether_peer_t *peer);
 static void on_signaling_event(void *user, tether_signaling_event_t evt, const tether_signaling_msg_t *msg);
@@ -162,22 +170,27 @@ static void start_signaling_locked(struct tether_sender *s)
 	};
 	s->sig = tether_signaling_create(&scfg);
 	tether_signaling_connect(s->sig);
+}
 
-	tether_audio_sender_config_t arcfg = {
-		.webrtc = NULL, // attached per-session below
-		.sample_rate = 48000,
-		.channels = 2,
-		.bitrate_kbps = 96,
-	};
-	s->audio_send = tether_audio_sender_create(&arcfg);
+static void release_session(struct receiver_session *r)
+{
+	if (!r) {
+		return;
+	}
+	if (r->audio) {
+		tether_audio_sender_release(r->audio);
+	}
+	if (r->wrtc) {
+		tether_webrtc_release(r->wrtc);
+	}
+	bfree(r->ctx);
+	bfree(r);
 }
 
 static void teardown_locked(struct tether_sender *s)
 {
 	for (size_t i = 0; i < s->sessions.num; ++i) {
-		struct receiver_session *r = s->sessions.array[i];
-		tether_webrtc_release(r->wrtc);
-		bfree(r);
+		release_session(s->sessions.array[i]);
 	}
 	da_clear(s->sessions);
 
@@ -188,10 +201,6 @@ static void teardown_locked(struct tether_sender *s)
 	if (s->adm) {
 		tether_admission_release(s->adm);
 		s->adm = NULL;
-	}
-	if (s->audio_send) {
-		tether_audio_sender_release(s->audio_send);
-		s->audio_send = NULL;
 	}
 }
 
@@ -262,28 +271,14 @@ static obs_properties_t *get_properties(void *data)
 	return tether_properties_for_sender(s ? s->parent : NULL);
 }
 
-// Filter passes the source through unchanged — we attach to capture, not modify.
+// Filter passes the source through unchanged — we attach to capture, not
+// modify. Encoding happens on the dedicated encoder thread bound to each
+// session's video track in webrtc.c; the filter just keeps the OBS source
+// alive and present in the graph so the encoder receives frames via the
+// normal source-output path.
 static struct obs_source_frame *filter_video(void *data, struct obs_source_frame *frame)
 {
-	struct tether_sender *s = data;
-	if (!s) {
-		return frame;
-	}
-	// Push frame to each active session. We do encoding+packetisation via
-	// libdatachannel's media handler, but the raw OBS frame is YUV420; for
-	// production we wire an encoder here. The packet push interface used
-	// below expects the encoded NAL bytes — wired up in webrtc.c.
-	pthread_mutex_lock(&s->lock);
-	for (size_t i = 0; i < s->sessions.num; ++i) {
-		struct receiver_session *r = s->sessions.array[i];
-		(void)r;
-		// The encoder pipeline is wired in production; the filter
-		// itself does not encode synchronously on the OBS render thread
-		// — see webrtc.c. Here we only signal the session that a frame
-		// is available; the encoder thread pulls it via OBS's normal
-		// rendering callbacks attached on accept.
-	}
-	pthread_mutex_unlock(&s->lock);
+	UNUSED_PARAMETER(data);
 	return frame;
 }
 
@@ -291,6 +286,10 @@ static struct obs_source_frame *filter_video(void *data, struct obs_source_frame
 
 static void create_session(struct tether_sender *s, const tether_peer_t *peer)
 {
+	struct session_ctx *ctx = bzalloc(sizeof(*ctx));
+	ctx->sender = s;
+	strncpy(ctx->peer_id, peer->peer_id, sizeof(ctx->peer_id) - 1);
+
 	tether_webrtc_config_t wcfg = {
 		.stun_url = s->stun_url && *s->stun_url ? s->stun_url : "stun:stun.cloudflare.com:3478",
 		.turn_url = s->turn_url,
@@ -302,46 +301,42 @@ static void create_session(struct tether_sender *s, const tether_peer_t *peer)
 		.on_local_sdp = session_local_sdp,
 		.on_local_ice = session_local_ice,
 		.on_state = session_state,
-		.on_video = session_video,
-		.on_audio = session_audio,
-		.user = s,
+		.user = ctx,
 	};
 	tether_webrtc_t *w = tether_webrtc_create(&wcfg);
 	if (!w) {
+		bfree(ctx);
 		return;
 	}
 
 	struct receiver_session *r = bzalloc(sizeof(*r));
 	strncpy(r->peer_id, peer->peer_id, sizeof(r->peer_id) - 1);
+	r->ctx = ctx;
 	r->wrtc = w;
 	r->video_track_id = tether_webrtc_add_video_track(w);
 
-	pthread_mutex_lock(&s->lock);
-	da_push_back(s->sessions, &r);
-
-	// Attach all selected audio sources to this peer's webrtc instance.
-	// We use one tether_audio_sender per webrtc, so create per-session.
 	tether_audio_sender_config_t arcfg = {
 		.webrtc = w,
 		.sample_rate = 48000,
 		.channels = 2,
 		.bitrate_kbps = 96,
 	};
-	tether_audio_sender_t *as = tether_audio_sender_create(&arcfg);
+	r->audio = tether_audio_sender_create(&arcfg);
+	bool include_mic = (s->mode != 1); // Twitch Stream Together strips the mic
 	for (size_t i = 0; i < s->audio_source_names.num; ++i) {
 		const char *name = s->audio_source_names.array[i];
-		// Twitch ST mode strips the host mic — the per-source filter
-		// applies the policy by selection set, not here.
-		tether_audio_sender_attach(as, name, name);
+		if (!include_mic && name && strstr(name, "Mic")) {
+			continue;
+		}
+		tether_audio_sender_attach(r->audio, name, name);
 	}
-	// The per-session audio sender is leaked into s->audio_send only when
-	// we have a single receiver; for multi-receiver fanout each session
-	// owns its own. We track them in sessions[].audio (added in a future
-	// refactor). For now release the global one if it was a placeholder.
-	(void)as; // ownership tracked on the session in production
+
+	pthread_mutex_lock(&s->lock);
+	da_push_back(s->sessions, &r);
 	pthread_mutex_unlock(&s->lock);
 
-	tether_log_info("sender: created session for peer=%s", peer->peer_id);
+	tether_log_info("sender: created session for peer=%s tracks=video+%d audio", peer->peer_id,
+			(int)s->audio_source_names.num);
 }
 
 static void on_admission_changed(void *user, const tether_peer_t *peer)
@@ -454,46 +449,28 @@ static void on_signaling_event(void *user, tether_signaling_event_t evt, const t
 
 static void session_local_sdp(void *user, const char *type, const char *sdp)
 {
-	(void)user;
-	(void)type;
-	(void)sdp;
-	// The sender originates the offer per-peer. The signaling backend
-	// routes by peer_id which we set as the session id. We do not have a
-	// peer_id back-reference here; the caller (session_state etc.) sees
-	// the same callback for every session. In production we bind the
-	// peer_id via a per-session user pointer, omitted here for brevity.
+	struct session_ctx *ctx = user;
+	tether_signaling_send_sdp(ctx->sender->sig, ctx->peer_id, type, sdp);
 }
 
 static void session_local_ice(void *user, const char *cand, const char *mid, int mline)
 {
-	(void)user;
-	(void)cand;
-	(void)mid;
-	(void)mline;
+	struct session_ctx *ctx = user;
+	tether_signaling_send_ice(ctx->sender->sig, ctx->peer_id, cand, mid, mline);
 }
 
 static void session_state(void *user, tether_webrtc_state_t state)
 {
-	(void)user;
-	(void)state;
-}
-
-static void session_video(void *u, const uint8_t *d, size_t n, int64_t p, int t)
-{
-	(void)u;
-	(void)d;
-	(void)n;
-	(void)p;
-	(void)t; // sender-side only outbound
-}
-
-static void session_audio(void *u, const uint8_t *d, size_t n, int64_t p, int t)
-{
-	(void)u;
-	(void)d;
-	(void)n;
-	(void)p;
-	(void)t;
+	struct session_ctx *ctx = user;
+	const char *label = state == TETHER_WRTC_STATE_CONNECTED    ? "connected"
+			    : state == TETHER_WRTC_STATE_CONNECTING ? "connecting"
+			    : state == TETHER_WRTC_STATE_FAILED     ? "failed"
+			    : state == TETHER_WRTC_STATE_CLOSED     ? "closed"
+								    : "new";
+	tether_log_info("sender: peer=%s state=%s", ctx->peer_id, label);
+	if (state == TETHER_WRTC_STATE_FAILED || state == TETHER_WRTC_STATE_CLOSED) {
+		tether_admission_disconnect_peer(ctx->sender->adm, ctx->peer_id);
+	}
 }
 
 // --- registration ---

@@ -335,9 +335,13 @@ static int track_handle_for(tether_webrtc_t *w, int track_id)
 	return -1;
 }
 
+// pts is part of the public API but libdatachannel's RTP packetiser uses its
+// own monotonic clock for RTP timestamps. Accepting pts on the API keeps the
+// signature compatible with future libdatachannel versions that expose
+// per-packet timestamp injection (rtcSendMessageEx variants).
 bool tether_webrtc_push_video(tether_webrtc_t *w, int track_id, const uint8_t *data, size_t size, int64_t pts)
 {
-	(void)pts; // libdatachannel packetiser stamps on its own clock
+	UNUSED_PARAMETER(pts);
 	if (!w || !data || size == 0) {
 		return false;
 	}
@@ -351,7 +355,7 @@ bool tether_webrtc_push_video(tether_webrtc_t *w, int track_id, const uint8_t *d
 
 bool tether_webrtc_push_audio(tether_webrtc_t *w, int track_id, const uint8_t *data, size_t size, int64_t pts)
 {
-	(void)pts;
+	UNUSED_PARAMETER(pts);
 	if (!w || !data || size == 0) {
 		return false;
 	}
