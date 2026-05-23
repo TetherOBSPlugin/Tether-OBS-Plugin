@@ -10,6 +10,7 @@
 #include <obs-module.h>
 #include <plugin-support.h>
 
+#include "control.h"
 #include "hub-dialog.hpp"
 #include "known-tokens.h"
 #include "log.h"
@@ -50,12 +51,14 @@ bool obs_module_load(void)
 	tether_receive_session_init();
 	tether_source_register();
 	tether_sender_register();
+	tether_control_init();
 	obs_frontend_add_tools_menu_item(obs_module_text("Source.Sender.Name"), on_tools_menu_clicked, NULL);
 	return true;
 }
 
 void obs_module_unload(void)
 {
+	tether_control_shutdown();
 	tether_close_all_dialogs();
 	tether_sender_shutdown();
 	tether_source_shutdown();

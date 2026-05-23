@@ -175,6 +175,8 @@ target_sources(
     src/known-tokens.h
     src/receive-session.c
     src/receive-session.h
+    src/control.c
+    src/control.h
     src/properties.c
     src/properties.h
     src/log.h
