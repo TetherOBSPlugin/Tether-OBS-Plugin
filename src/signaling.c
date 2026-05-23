@@ -318,6 +318,19 @@ bool tether_signaling_connect(tether_signaling_t *sig)
 	}
 	set_state(sig, TETHER_SIG_STATE_CONNECTING);
 
+	// Build the WS URL. Receivers must include the token as a query
+	// parameter so the edge can route them to the same Durable Object as
+	// the sender that minted it. Without the query the edge falls back to
+	// generateToken() and creates a brand-new room, which yields the
+	// "token_invalid" we saw in the field.
+	struct dstr url_buf;
+	dstr_init(&url_buf);
+	dstr_copy(&url_buf, sig->server_url);
+	if (sig->cfg.role == TETHER_ROLE_RECEIVER && sig->token && *sig->token) {
+		dstr_cat(&url_buf, strchr(sig->server_url, '?') ? "&token=" : "?token=");
+		dstr_cat(&url_buf, sig->token);
+	}
+
 	// disableTlsVerification: libdatachannel against system GnuTLS does not
 	// pick up the platform CA bundle on its own (upstream issue #1016) —
 	// the media path is independently authenticated via DTLS-SRTP
@@ -336,7 +349,9 @@ bool tether_signaling_connect(tether_signaling_t *sig)
 		.pingIntervalMs = -1,
 		.maxOutstandingPings = -1,
 	};
-	int ws = rtcCreateWebSocketEx(sig->server_url, &cfg);
+	int ws = rtcCreateWebSocketEx(url_buf.array, &cfg);
+	tether_log_info("signaling: opening WS to %s", url_buf.array);
+	dstr_free(&url_buf);
 	if (ws <= 0) {
 		tether_log_error("signaling: create failed url=%s rc=%d", sig->server_url, ws);
 		set_state(sig, TETHER_SIG_STATE_FAILED);
