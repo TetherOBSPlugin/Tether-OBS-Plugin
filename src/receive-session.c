@@ -210,10 +210,21 @@ static void signaling_event(void *user, tether_signaling_event_t evt, const teth
 {
 	tether_receive_session_t *s = user;
 	switch (evt) {
-	case TETHER_SIG_EVT_REQUEST_ACCEPTED:
+	case TETHER_SIG_EVT_REQUEST_ACCEPTED: {
+		// Once we're already past ACCEPTED (negotiating / connected),
+		// a fresh 'accepted' from the sender is a retry signal — don't
+		// roll our state machine back, the subsequent duplicate SDP
+		// offer would otherwise blow up addRemoteCandidate.
+		tether_receive_state_t cur = os_atomic_load_long(&s->state);
+		if (cur == TETHER_RX_STATE_NEGOTIATING || cur == TETHER_RX_STATE_CONNECTED) {
+			tether_log_info("rx-session(%s): ignoring duplicate accept (state=%s)", s->token,
+					tether_receive_state_name(cur));
+			break;
+		}
 		tether_log_info("rx-session(%s): accepted by sender", s->token);
 		set_state(s, TETHER_RX_STATE_ACCEPTED);
 		break;
+	}
 	case TETHER_SIG_EVT_TOKEN_INVALID:
 		tether_log_warning("rx-session(%s): token invalid", s->token);
 		set_state(s, TETHER_RX_STATE_FAILED);
@@ -231,7 +242,8 @@ static void signaling_event(void *user, tether_signaling_event_t evt, const teth
 		// returns RTC_ERR_INVALID(-2). If the user wants to retry, they
 		// can re-register the token.
 		tether_receive_state_t cur = os_atomic_load_long(&s->state);
-		if (cur == TETHER_RX_STATE_NEGOTIATING || cur == TETHER_RX_STATE_CONNECTED) {
+		if (cur == TETHER_RX_STATE_NEGOTIATING || cur == TETHER_RX_STATE_CONNECTED ||
+		    cur == TETHER_RX_STATE_FAILED || cur == TETHER_RX_STATE_CLOSED) {
 			tether_log_info("rx-session(%s): ignoring duplicate SDP offer (state=%s)", s->token,
 					tether_receive_state_name(cur));
 			break;
