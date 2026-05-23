@@ -413,10 +413,10 @@ static void deliver_decoded_frame(struct tether_source *s, int64_t pts)
 	enum video_format obs_fmt = av_to_obs_video_format(s->vframe->format);
 	if (obs_fmt == VIDEO_FORMAT_NONE) {
 		// libavcodec gave us a format OBS cannot consume directly. The
-		// vast majority of H.264 streams decode to YUV420P / NV12, so we
-		// simply drop here rather than wire sws_scale conversion for an
-		// edge case; if this ever fires in production we'll see it in
-		// the log and add the conversion path.
+		// vast majority of H.264 streams decode to YUV420P / NV12, so
+		// we drop here rather than maintain a sws_scale fall-back path
+		// for an outcome we have never observed; the warning below makes
+		// it visible if a peer ever does negotiate something exotic.
 		tether_log_warning("source: decoder produced unhandled pix_fmt=%d", s->vframe->format);
 		return;
 	}
