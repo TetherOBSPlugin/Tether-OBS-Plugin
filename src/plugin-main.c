@@ -6,13 +6,21 @@
  * tears them down. Everything else lives in its own translation unit.
  */
 
+#include <obs-frontend-api.h>
 #include <obs-module.h>
 #include <plugin-support.h>
 
 #include "log.h"
+#include "sender-dialog.hpp"
 #include "sender.h"
 #include "source.h"
 #include "webrtc.h"
+
+static void on_tools_menu_clicked(void *priv)
+{
+	UNUSED_PARAMETER(priv);
+	tether_open_sender_dialog();
+}
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("tether", "en-US")
@@ -38,11 +46,13 @@ bool obs_module_load(void)
 
 	tether_source_register();
 	tether_sender_register();
+	obs_frontend_add_tools_menu_item(obs_module_text("Source.Sender.Name"), on_tools_menu_clicked, NULL);
 	return true;
 }
 
 void obs_module_unload(void)
 {
+	tether_close_sender_dialog();
 	tether_sender_shutdown();
 	tether_source_shutdown();
 	tether_webrtc_global_shutdown();

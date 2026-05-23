@@ -4,8 +4,8 @@ include("cmake/common/bootstrap.cmake" NO_POLICY_SCOPE)
 
 project(${_name} VERSION ${_version})
 
-option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI extensions" OFF)
-option(ENABLE_QT "Use Qt functionality" OFF)
+option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI extensions" ON)
+option(ENABLE_QT "Use Qt functionality" ON)
 
 # We ship as a shared module (loaded by OBS), so every static library we pull
 # in via FetchContent (opus, libdatachannel, usrsctp, libsrtp, libjuice, ...)
@@ -165,6 +165,8 @@ target_sources(
     src/source.h
     src/sender.c
     src/sender.h
+    src/sender-dialog.cpp
+    src/sender-dialog.hpp
     src/properties.c
     src/properties.h
     src/log.h
