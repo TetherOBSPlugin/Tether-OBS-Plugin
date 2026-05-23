@@ -66,6 +66,12 @@ function(_tether_relax_warnings_in_dir _dir)
         COMPILE_WARNING_AS_ERROR OFF
         XCODE_ATTRIBUTE_GCC_TREAT_WARNINGS_AS_ERRORS NO
         XCODE_ATTRIBUTE_WARNING_CFLAGS ""
+        # usrsctp ships its own struct inpcb that clashes with macOS'
+        # <netinet/in_pcb.h>. With Clang Modules enabled (the Xcode default),
+        # the compiler enforces cross-TU struct compatibility and rejects the
+        # build. Disable modules for foreign targets so they compile like
+        # vanilla C.
+        XCODE_ATTRIBUTE_CLANG_ENABLE_MODULES NO
     )
   endforeach()
   get_property(_subdirs DIRECTORY ${_dir} PROPERTY SUBDIRECTORIES)
